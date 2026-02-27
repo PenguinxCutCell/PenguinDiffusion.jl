@@ -20,7 +20,7 @@ condition is required at x=0. We impose spatial Dirichlet there from u_exact.
 @inline u_exact(x) = x^2 + 0.35 * x + 0.8
 @inline d2u_exact(x) = 2.0
 
-function solve_case(n::Int; x0::Float64=0.85, kappa::Float64=1.0)
+function solve_case(n::Int; x0::Float64=0.8501, kappa::Float64=1.0)
     x = collect(range(0.0, 1.0; length=n + 1))
     body(xp, _t=0.0) = xp - x0
     moments = geometric_moments(body, (x,), Float64, zero; method=:implicitintegration)
@@ -68,7 +68,7 @@ function solve_case(n::Int; x0::Float64=0.85, kappa::Float64=1.0)
 end
 
 function main()
-    ns = (128, 256)
+    ns = (8, 16, 32, 64, 128, 256)
     hs = Float64[]
     errs = Float64[]
 
