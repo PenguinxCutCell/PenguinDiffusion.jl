@@ -49,6 +49,9 @@ end
 
 include("test_reduction_contract.jl")
 include("test_updates_and_rebuild.jl")
+include("test_twophase.jl")
+include("test_twophase_matrix_assembly.jl")
+include("test_twophase_manufactured.jl")
 include("test_unsteady_matrixfree.jl")
 include("test_sciml_integration.jl")
 include("test_steady_solver.jl")
