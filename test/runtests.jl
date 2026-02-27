@@ -29,6 +29,26 @@ function build_test_system(; kappa=1.0, source=nothing)
     return sys
 end
 
+function build_dirichlet_test_system(; kappa=1.0, source=nothing, ulo=1.5, uhi=2.0)
+    x = collect(range(0.0, 1.0; length=8))
+    y = collect(range(0.0, 1.0; length=7))
+    full_domain(x, y, _=0) = -1.0
+    moments = CartesianGeometry.geometric_moments(full_domain, (x, y), Float64, zero; method=:implicitintegration)
+    ulo_ref = Ref(Float64(ulo))
+    uhi_ref = Ref(Float64(uhi))
+    bc = CartesianOperators.BoxBC(
+        (CartesianOperators.Dirichlet(ulo_ref), CartesianOperators.Neumann(0.0)),
+        (CartesianOperators.Dirichlet(uhi_ref), CartesianOperators.Neumann(0.0)),
+    )
+    ops = CartesianOperators.assembled_ops(moments; bc=bc)
+    interface = CartesianOperators.RobinConstraint(ones(Float64, ops.Nd), zeros(Float64, ops.Nd), zeros(Float64, ops.Nd))
+    prob = PenguinDiffusion.DiffusionProblem(kappa, bc, interface, source)
+    sys = PenguinDiffusion.build_system(moments, prob)
+    return sys, ulo_ref, uhi_ref
+end
+
 include("test_reduction_contract.jl")
 include("test_updates_and_rebuild.jl")
 include("test_sciml_integration.jl")
+include("test_steady_solver.jl")
+include("test_manufactured_boxbc.jl")

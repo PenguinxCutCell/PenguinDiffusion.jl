@@ -1,11 +1,5 @@
 # Todo
 
-- [ ] Add steady solver
-- [ ] Add example unsteady robin disk
-- [ ] Time-varying Border box boundary condition
-- [ ] Time varying Robin interface condition
-- [ ] Space-varying Robin interface condition
-- [ ] Space-varying Border box boundary condition
 - [ ] Two phase diffusion
 - [ ] Add convergence tests in a Benchmark package
 - [ ] Check Penguin.jl package 

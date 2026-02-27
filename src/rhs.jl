@@ -37,6 +37,9 @@ function PenguinSolverCore.rhs!(du, sys::DiffusionSystem, u, p, t)
 
     apply_L!(du, sys, u)
     @inbounds for i in eachindex(du)
+        du[i] += sys.dirichlet_affine[i]
+    end
+    @inbounds for i in eachindex(du)
         du[i] *= sys.kappa
     end
 

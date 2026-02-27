@@ -1,5 +1,7 @@
 using LinearAlgebra
+using LinearSolve
 using Printf
+using SciMLBase
 
 using CartesianGeometry
 using CartesianOperators
@@ -59,29 +61,19 @@ function main()
     n_gamma = length(sys.dof_gamma.indices)
     @printf("Built system: n_omega=%d, n_gamma=%d\n", n_omega, n_gamma)
 
-    # Build reduced affine steady operator:
-    #   L(u) = A*u + c, where
-    #   A = L_oo - L_og * C_gamma^{-1} * C_omega
-    #   c = L_og * C_gamma^{-1} * r_gamma
-    #
-    # Steady equation from M*du/dt = kappa*L(u) + b:
-    #   0 = kappa*(A*u + c) + b
-    #   A*u = -(c + b/kappa)
+    # Solve steady reduced system with LinearSolve.
+    sol = steady_solve(
+        sys;
+        alg=LinearSolve.SimpleGMRES(),
+        reltol=1e-12,
+        abstol=1e-12,
+        maxiters=20_000,
+    )
+    SciMLBase.successful_retcode(sol) || error("steady solve failed with retcode=$(sol.retcode)")
+    u_reduced = sol.u
+
     active = sys.dof_omega.indices
     V_active = Float64.(sys.moments.V[active])
-    b_vec = V_active .* f_source
-
-    A = Matrix(sys.L_oo)
-    c = zeros(Float64, n_omega)
-    if n_gamma > 0
-        S = sys.C_gamma_fact \ Matrix(sys.C_omega)
-        q = sys.C_gamma_fact \ sys.r_gamma
-        A .-= Matrix(sys.L_og) * S
-        c .= Matrix(sys.L_og) * q
-    end
-
-    rhs = -(c .+ b_vec ./ kappa)
-    u_reduced = A \ rhs
 
     u_full, _gamma_full = full_state(sys, u_reduced)
 

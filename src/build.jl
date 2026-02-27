@@ -1,34 +1,3 @@
-function dirichlet_mask_values(dims::NTuple{N,Int}, bc::CartesianOperators.BoxBC{N,T}) where {N,T}
-    nd = prod(dims)
-    mask = falses(nd)
-    vals = zeros(T, nd)
-    li = LinearIndices(dims)
-
-    @inbounds for I in CartesianIndices(dims)
-        idx = li[I]
-        for d in 1:N
-            if I[d] == 1 && bc.lo[d] isa CartesianOperators.Dirichlet{T}
-                u = (bc.lo[d]::CartesianOperators.Dirichlet{T}).u
-                if mask[idx] && vals[idx] != u
-                    throw(ArgumentError("conflicting Dirichlet values at node $idx"))
-                end
-                mask[idx] = true
-                vals[idx] = u
-            end
-            if I[d] == dims[d] && bc.hi[d] isa CartesianOperators.Dirichlet{T}
-                u = (bc.hi[d]::CartesianOperators.Dirichlet{T}).u
-                if mask[idx] && vals[idx] != u
-                    throw(ArgumentError("conflicting Dirichlet values at node $idx"))
-                end
-                mask[idx] = true
-                vals[idx] = u
-            end
-        end
-    end
-
-    return mask, vals
-end
-
 function padded_mask(dims::NTuple{N,Int}) where {N}
     nd = prod(dims)
     mask = falses(nd)
@@ -52,6 +21,32 @@ function _constraint_matrices(::CartesianOperators.AssembledOps, interface)
     throw(ArgumentError("v0 supports only RobinConstraint; got $(typeof(interface))"))
 end
 
+function _normalize_robin_interface(interface::CartesianOperators.RobinConstraint, ::Type{T}) where {T}
+    if interface isa CartesianOperators.RobinConstraint{T}
+        return interface
+    end
+    return CartesianOperators.RobinConstraint(
+        convert(Vector{T}, interface.a),
+        convert(Vector{T}, interface.b),
+        convert(Vector{T}, interface.g),
+    )
+end
+
+function _normalize_robin_interface(interface, ::Type{T}) where {T}
+    throw(ArgumentError("v0 supports only RobinConstraint; got $(typeof(interface))"))
+end
+
+function _refresh_constraint_blocks!(sys::DiffusionSystem{N,T}) where {N,T}
+    C_omega_full, C_gamma_full, r_full = _constraint_matrices(sys.ops, sys.interface)
+    idx_omega = sys.dof_omega.indices
+    idx_gamma = sys.dof_gamma.indices
+
+    sys.C_omega = C_omega_full[idx_gamma, idx_omega]
+    sys.C_gamma = C_gamma_full[idx_gamma, idx_gamma]
+    sys.r_gamma = collect(T.(r_full[idx_gamma]))
+    return nothing
+end
+
 function _normalize_sourcefun(source)
     if source === nothing
         return nothing
@@ -70,6 +65,7 @@ function build_system(
     igamma_tol::Union{Nothing,Real} = nothing,
 ) where {N,T}
     ops = CartesianOperators.assembled_ops(moments; bc=prob.bc)
+    interface = _normalize_robin_interface(prob.interface, T)
 
     V = T.(moments.V)
     maxV = maximum(abs, V; init=zero(T))
@@ -80,7 +76,8 @@ function build_system(
         omega_material_mask[i] = (moments.cell_type[i] != 0) && (V[i] > vtol_local)
     end
 
-    dir_mask, dir_vals = dirichlet_mask_values(ops.dims, ops.bc)
+    dir_mask, dir_vals_raw = CartesianOperators.dirichlet_mask_values(ops.dims, ops.bc)
+    dir_vals = collect(T.(dir_vals_raw))
     pad_mask = padded_mask(ops.dims)
 
     omega_mask = copy(omega_material_mask)
@@ -106,7 +103,7 @@ function build_system(
     L_oo = L_oo_full[dof_omega.indices, dof_omega.indices]
     L_og = L_og_full[dof_omega.indices, dof_gamma.indices]
 
-    C_omega_full, C_gamma_full, r_full = _constraint_matrices(ops, prob.interface)
+    C_omega_full, C_gamma_full, r_full = _constraint_matrices(ops, interface)
     C_omega = C_omega_full[dof_gamma.indices, dof_omega.indices]
     C_gamma = C_gamma_full[dof_gamma.indices, dof_gamma.indices]
     r_gamma = collect(T.(r_full[dof_gamma.indices]))
@@ -114,6 +111,8 @@ function build_system(
     C_gamma_fact = isempty(dof_gamma.indices) ? nothing : lu(C_gamma)
 
     M = spdiagm(0 => V[dof_omega.indices])
+    b_full = CartesianOperators.dirichlet_rhs(ops)
+    dirichlet_affine = collect(T.(b_full[dof_omega.indices]))
 
     sourcefun = _normalize_sourcefun(prob.source)
 
@@ -122,6 +121,7 @@ function build_system(
         PenguinSolverCore.UpdateManager(),
         moments,
         ops,
+        interface,
         dof_omega,
         dof_gamma,
         M,
@@ -136,8 +136,10 @@ function build_system(
         sourcefun,
         dir_mask,
         dir_vals,
+        dirichlet_affine,
         zeros(T, length(dof_gamma.indices)),
         zeros(T, length(dof_omega.indices)),
+        false,
         0,
     )
 end

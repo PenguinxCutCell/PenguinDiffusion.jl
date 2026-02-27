@@ -6,17 +6,23 @@ version = "0.1.0"
 CartesianGeometry = "5961ddb3-e46d-41f1-806c-0197ba873d0b"
 CartesianOperators = "6ffd2c7a-1a34-4f8b-a2c9-3d5e7f9b0c1d"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+LinearSolve = "7ed4a6bd-45f5-4d41-b270-4a48e9bafcae"
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
 PenguinSolverCore = "8f14e45f-7d0b-4a6b-9c1e-2f3d4b5a6c7d"
+Roots = "f2b01f46-fcfa-551c-844a-d8ac1e96c665"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 
 [compat]
 CartesianGeometry = "0.1"
 CartesianOperators = "0.1"
+LinearSolve = "3"
 OrdinaryDiffEq = "6.108.0"
 PenguinSolverCore = "0.1"
+Roots = "2.2.12"
 SciMLBase = "2.144.2"
+SpecialFunctions = "2.7.1"
 julia = "1"
 
 [extras]

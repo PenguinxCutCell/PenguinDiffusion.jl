@@ -44,7 +44,8 @@ else
 
             @test any(t -> isapprox(t, tstar; atol=1000eps(tstar)), sol.t)
             @test sys.rebuild_calls == 0
-            @test isapprox(norm(sys.r_gamma .- 0.75), 0.0; atol=0.0, rtol=0.0)
+            expected = 0.75 .* sys.ops.Iγ[sys.dof_gamma.indices]
+            @test isapprox(norm(sys.r_gamma .- expected), 0.0; atol=0.0, rtol=0.0)
 
             sys_ref = build_test_system()
             prob_ref = PenguinSolverCore.sciml_odeproblem(sys_ref, u0, (0.0, 1.0); p=nothing)
