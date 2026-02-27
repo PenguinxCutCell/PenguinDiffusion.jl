@@ -39,9 +39,6 @@ function PenguinSolverCore.rhs!(du, sys::DiffusionSystem, u, p, t)
     @inbounds for i in eachindex(du)
         du[i] += sys.dirichlet_affine[i]
     end
-    @inbounds for i in eachindex(du)
-        du[i] *= sys.kappa
-    end
 
     if sys.sourcefun !== nothing
         src = _evaluate_callable(sys.sourcefun, sys, u, p, t)

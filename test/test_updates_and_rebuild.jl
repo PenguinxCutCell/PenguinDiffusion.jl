@@ -29,13 +29,32 @@ end
         sys = build_test_system()
         u = zeros(Float64, length(sys.dof_omega.indices))
 
+        L_before = copy(sys.L_oo)
         kupd = PenguinDiffusion.KappaUpdater((sys, u, p, t) -> 2.5)
         PenguinSolverCore.add_update!(sys, PenguinSolverCore.AtTimes([0.5]), kupd)
 
         PenguinSolverCore.apply_scheduled_updates!(sys, u, nothing, 0.5; step=0)
 
         @test sys.rebuild_calls == 1
-        @test sys.kappa == 2.5
+        @test sys.diffusion_dirty == false
+        @test all(isapprox.(sys.kappa_cell, 2.5; atol=0.0, rtol=0.0))
+        @test norm(Matrix(sys.L_oo - L_before)) > 1e-12
+    end
+
+    @testset "KappaUpdater accepts spatial full field" begin
+        sys = build_test_system()
+        u = zeros(Float64, length(sys.dof_omega.indices))
+
+        kappa_full = collect(range(0.6, 1.8; length=sys.ops.Nd))
+        L_before = copy(sys.L_oo)
+        kupd = PenguinDiffusion.KappaUpdater((sys, u, p, t) -> kappa_full)
+        PenguinSolverCore.add_update!(sys, PenguinSolverCore.AtTimes([0.5]), kupd)
+
+        PenguinSolverCore.apply_scheduled_updates!(sys, u, nothing, 0.5; step=0)
+
+        @test sys.rebuild_calls == 1
+        @test isapprox(sys.kappa_cell, kappa_full; atol=0.0, rtol=0.0)
+        @test norm(Matrix(sys.L_oo - L_before)) > 1e-12
     end
 
     @testset "RobinGUpdater is rhs_only (no rebuild)" begin
@@ -92,6 +111,26 @@ end
 
     x_omega_full, x_gamma_full = PenguinDiffusion.full_state(sys, u)
     full_eval = CartesianOperators.laplacian_matrix(sys.ops, x_omega_full, x_gamma_full)
+    ref_reduced = full_eval[sys.dof_omega.indices]
+
+    @test isapprox(lhs_reduced, ref_reduced; atol=1e-11, rtol=1e-11)
+end
+
+@testset "Variable-kappa reduced contract" begin
+    sys, _, _ = build_dirichlet_test_system(; source=nothing, ulo=1.25, uhi=2.75)
+    u = randn(length(sys.dof_omega.indices))
+
+    kappa_full = @. 0.9 + 0.3 * sin(0.17 * (1:sys.ops.Nd))
+    kupd = PenguinDiffusion.KappaUpdater((sys, u, p, t) -> kappa_full)
+    PenguinSolverCore.add_update!(sys, PenguinSolverCore.AtTimes([0.2]), kupd)
+    PenguinSolverCore.apply_scheduled_updates!(sys, u, nothing, 0.2; step=0)
+
+    lhs_reduced = zeros(Float64, length(u))
+    PenguinDiffusion.apply_L!(lhs_reduced, sys, u)
+    lhs_reduced .+= sys.dirichlet_affine
+
+    x_omega_full, x_gamma_full = PenguinDiffusion.full_state(sys, u)
+    full_eval = CartesianOperators.laplacian_matrix(sys.ops, x_omega_full, x_gamma_full, sys.kappa_face)
     ref_reduced = full_eval[sys.dof_omega.indices]
 
     @test isapprox(lhs_reduced, ref_reduced; atol=1e-11, rtol=1e-11)

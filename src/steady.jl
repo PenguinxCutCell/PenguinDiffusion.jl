@@ -22,12 +22,12 @@ function _steady_rhs(
         ldiv!(sys.C_gamma_fact, q)
         mul!(rhs, sys.L_og, q)
         @inbounds for i in eachindex(rhs)
-            rhs[i] *= -sys.kappa
+            rhs[i] = -rhs[i]
         end
     end
 
     @inbounds for i in eachindex(rhs)
-        rhs[i] -= sys.kappa * sys.dirichlet_affine[i]
+        rhs[i] -= sys.dirichlet_affine[i]
     end
 
     if sys.sourcefun !== nothing
@@ -62,9 +62,6 @@ function _steady_mul!(
             out[i] += tmp_omega[i]
         end
     end
-    @inbounds for i in eachindex(out)
-        out[i] *= sys.kappa
-    end
     return out
 end
 
@@ -75,7 +72,8 @@ function steady_linear_problem(
     u0=nothing,
     u_eval=nothing,
 ) where {N,T}
-    iszero(sys.kappa) && throw(ArgumentError("steady solver requires nonzero kappa"))
+    maximum(abs, sys.kappa_face; init=zero(T)) == zero(T) &&
+        throw(ArgumentError("steady solver requires nonzero kappa (all face coefficients are zero)"))
 
     n_omega = length(sys.dof_omega.indices)
     n_gamma = length(sys.dof_gamma.indices)

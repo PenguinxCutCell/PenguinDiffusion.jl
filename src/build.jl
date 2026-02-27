@@ -47,6 +47,35 @@ function _refresh_constraint_blocks!(sys::DiffusionSystem{N,T}) where {N,T}
     return nothing
 end
 
+function _normalize_kappa_cell(kappa, Nd::Int, ::Type{T}) where {T}
+    if kappa isa Number
+        return fill(convert(T, kappa), Nd)
+    elseif kappa isa AbstractVector
+        length(kappa) == Nd ||
+            throw(DimensionMismatch("kappa vector has length $(length(kappa)); expected $Nd (full cell-centered field)"))
+        out = Vector{T}(undef, Nd)
+        @inbounds for i in 1:Nd
+            out[i] = convert(T, kappa[i])
+        end
+        return out
+    end
+    throw(ArgumentError("kappa must be a scalar or full cell vector, got $(typeof(kappa))"))
+end
+
+function _refresh_diffusion_blocks!(sys::DiffusionSystem{N,T}) where {N,T}
+    KWinv = spdiagm(0 => sys.kappa_face) * sys.ops.Winv
+    L_oo_full = sparse(-sys.ops.G' * KWinv * sys.ops.G)
+    L_og_full = sparse(-sys.ops.G' * KWinv * sys.ops.H)
+
+    idx_omega = sys.dof_omega.indices
+    idx_gamma = sys.dof_gamma.indices
+    sys.L_oo = L_oo_full[idx_omega, idx_omega]
+    sys.L_og = L_og_full[idx_omega, idx_gamma]
+
+    _refresh_dirichlet_cache!(sys)
+    return nothing
+end
+
 function _normalize_sourcefun(source)
     if source === nothing
         return nothing
@@ -63,6 +92,7 @@ function build_system(
     prob::DiffusionProblem;
     vtol::Union{Nothing,Real} = nothing,
     igamma_tol::Union{Nothing,Real} = nothing,
+    kappa_averaging::Symbol = :harmonic,
 ) where {N,T}
     ops = CartesianOperators.assembled_ops(moments; bc=prob.bc)
     interface = _normalize_robin_interface(prob.interface, T)
@@ -98,8 +128,12 @@ function build_system(
     dof_omega = PenguinSolverCore.DofMap(omega_active)
     dof_gamma = PenguinSolverCore.DofMap(gamma_active)
 
-    L_oo_full = sparse(-ops.G' * ops.Winv * ops.G)
-    L_og_full = sparse(-ops.G' * ops.Winv * ops.H)
+    kappa_cell = _normalize_kappa_cell(prob.kappa, ops.Nd, T)
+    kappa_face = CartesianOperators.cell_to_face_values(ops, kappa_cell; averaging=kappa_averaging)
+    KWinv = spdiagm(0 => kappa_face) * ops.Winv
+
+    L_oo_full = sparse(-ops.G' * KWinv * ops.G)
+    L_og_full = sparse(-ops.G' * KWinv * ops.H)
     L_oo = L_oo_full[dof_omega.indices, dof_omega.indices]
     L_og = L_og_full[dof_omega.indices, dof_gamma.indices]
 
@@ -111,7 +145,7 @@ function build_system(
     C_gamma_fact = isempty(dof_gamma.indices) ? nothing : lu(C_gamma)
 
     M = spdiagm(0 => V[dof_omega.indices])
-    b_full = CartesianOperators.dirichlet_rhs(ops)
+    b_full = CartesianOperators.dirichlet_rhs(ops, kappa_face)
     dirichlet_affine = collect(T.(b_full[dof_omega.indices]))
 
     sourcefun = _normalize_sourcefun(prob.source)
@@ -131,7 +165,9 @@ function build_system(
         C_gamma,
         r_gamma,
         C_gamma_fact,
-        convert(T, prob.kappa),
+        kappa_cell,
+        kappa_face,
+        kappa_averaging,
         nothing,
         sourcefun,
         dir_mask,
@@ -139,6 +175,7 @@ function build_system(
         dirichlet_affine,
         zeros(T, length(dof_gamma.indices)),
         zeros(T, length(dof_omega.indices)),
+        false,
         false,
         0,
     )

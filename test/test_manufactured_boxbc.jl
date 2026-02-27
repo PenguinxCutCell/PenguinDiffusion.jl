@@ -45,7 +45,7 @@
         Lu .+= sys.dirichlet_affine
 
         V_active = Float64.(moments.V[sys.dof_omega.indices])
-        source_density_reduced = -(kappa .* Lu) ./ V_active
+        source_density_reduced = -Lu ./ V_active
         sys.sourcefun = (_sys, _u, _p, _t) -> source_density_reduced
 
         # Steady solve with LinearSolve backend.
@@ -132,7 +132,7 @@ end
             Lu .+= sys.dirichlet_affine
 
             mass_dudt = V_active .* dudt_r
-            src_mass = mass_dudt .- kappa .* Lu
+            src_mass = mass_dudt .- Lu
             return src_mass ./ V_active
         end
 

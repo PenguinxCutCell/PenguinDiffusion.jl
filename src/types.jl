@@ -1,12 +1,12 @@
-struct DiffusionProblem{T,BC,IC,SRC}
-    kappa::T
+struct DiffusionProblem{K,BC,IC,SRC}
+    kappa::K
     bc::BC
     interface::IC
     source::SRC
 end
 
-DiffusionProblem(kappa::T, bc, interface, source=nothing) where {T<:Real} =
-    DiffusionProblem{T,typeof(bc),typeof(interface),typeof(source)}(kappa, bc, interface, source)
+DiffusionProblem(kappa, bc, interface) =
+    DiffusionProblem(kappa, bc, interface, nothing)
 
 mutable struct DiffusionSystem{N,T} <: PenguinSolverCore.AbstractSystem
     cache::PenguinSolverCore.InvalidationCache
@@ -29,7 +29,9 @@ mutable struct DiffusionSystem{N,T} <: PenguinSolverCore.AbstractSystem
     r_gamma::Vector{T}
     C_gamma_fact
 
-    kappa::T
+    kappa_cell::Vector{T}
+    kappa_face::Vector{T}
+    kappa_averaging::Symbol
     gfun::Union{Nothing,Function}
     sourcefun::Union{Nothing,Function}
 
@@ -40,6 +42,7 @@ mutable struct DiffusionSystem{N,T} <: PenguinSolverCore.AbstractSystem
     tmp_gamma::Vector{T}
     tmp_omega::Vector{T}
 
+    diffusion_dirty::Bool
     constraints_dirty::Bool
     rebuild_calls::Int
 end
@@ -61,6 +64,38 @@ function _set_r_gamma!(sys::DiffusionSystem{N,T}, value) where {N,T}
     _set_interface_vector!(sys.interface.g, sys, value; name="interface g")
     _refresh_r_gamma_from_interface!(sys)
     return sys.r_gamma
+end
+
+function _set_kappa_cell!(sys::DiffusionSystem{N,T}, value; name::AbstractString="kappa") where {N,T}
+    Nd = sys.ops.Nd
+    idx_omega = sys.dof_omega.indices
+
+    if value isa Number
+        fill!(sys.kappa_cell, convert(T, value))
+        return sys.kappa_cell
+    elseif value isa AbstractVector
+        if length(value) == Nd
+            @inbounds for i in 1:Nd
+                sys.kappa_cell[i] = convert(T, value[i])
+            end
+            return sys.kappa_cell
+        elseif length(value) == length(idx_omega)
+            fill!(sys.kappa_cell, zero(T))
+            @inbounds for i in eachindex(idx_omega)
+                sys.kappa_cell[idx_omega[i]] = convert(T, value[i])
+            end
+            return sys.kappa_cell
+        end
+        throw(DimensionMismatch("$name vector has length $(length(value)); expected $Nd (full) or $(length(idx_omega)) (omega-reduced)"))
+    end
+
+    throw(ArgumentError("unsupported $name type $(typeof(value)); expected scalar or vector"))
+end
+
+function _set_kappa!(sys::DiffusionSystem{N,T}, value; name::AbstractString="kappa") where {N,T}
+    _set_kappa_cell!(sys, value; name=name)
+    CartesianOperators.cell_to_face_values!(sys.kappa_face, sys.ops, sys.kappa_cell; averaging=sys.kappa_averaging)
+    return sys.kappa_face
 end
 
 function _set_interface_vector!(dest::Vector{T}, sys::DiffusionSystem{N,T}, value; name::AbstractString) where {N,T}
@@ -106,7 +141,7 @@ function _refresh_dirichlet_cache!(sys::DiffusionSystem{N,T}) where {N,T}
         sys.dirichlet_values[i] = convert(T, vals[i])
     end
 
-    b_full = CartesianOperators.dirichlet_rhs(sys.ops)
+    b_full = CartesianOperators.dirichlet_rhs(sys.ops, sys.kappa_face)
     idx_omega = sys.dof_omega.indices
     length(sys.dirichlet_affine) == length(idx_omega) ||
         throw(DimensionMismatch("dirichlet_affine length does not match omega DOF count"))

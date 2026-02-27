@@ -138,7 +138,9 @@ function PenguinSolverCore.update!(upd::BoxDirichletUpdater, sys::DiffusionSyste
 end
 
 function PenguinSolverCore.update!(upd::KappaUpdater, sys::DiffusionSystem, u, p, t)
-    sys.kappa = convert(typeof(sys.kappa), _evaluate_callable(upd.kappa_fun, sys, u, p, t))
+    payload = _evaluate_callable(upd.kappa_fun, sys, u, p, t)
+    _set_kappa!(sys, payload; name="kappa")
+    sys.diffusion_dirty = true
     return :matrix
 end
 

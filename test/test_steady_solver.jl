@@ -22,11 +22,10 @@ function explicit_reduced_steady_system(sys::PenguinDiffusion.DiffusionSystem, s
         A .-= Matrix(sys.L_og) * S
         c .= Matrix(sys.L_og) * q
     end
-    A .*= sys.kappa
 
     V_active = Float64.(sys.moments.V[sys.dof_omega.indices])
     src = V_active .* source_scalar
-    rhs = .-(sys.kappa .* (c .+ sys.dirichlet_affine) .+ src)
+    rhs = .-(c .+ sys.dirichlet_affine .+ src)
     return A, rhs
 end
 
