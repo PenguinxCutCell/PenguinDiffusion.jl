@@ -77,7 +77,7 @@ function solve_case(nx::Int, ny::Int; kappa::Float64=1.4)
 end
 
 function main()
-    ns = (12, 18, 26, 34)
+    ns = (8, 16, 32, 64, 128, 256)
     hs = Float64[]
     errs = Float64[]
 

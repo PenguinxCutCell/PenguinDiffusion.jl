@@ -14,6 +14,8 @@ mutable struct DiffusionSystem{N,T} <: PenguinSolverCore.AbstractSystem
 
     moments::CartesianGeometry.GeometricMoments{N,T}
     ops::CartesianOperators.AssembledOps{N,T}
+    kops::CartesianOperators.KernelOps{N,T}
+    kwork::CartesianOperators.KernelWork{T}
     interface::CartesianOperators.RobinConstraint{T}
 
     dof_omega::PenguinSolverCore.DofMap{Int}
@@ -41,6 +43,11 @@ mutable struct DiffusionSystem{N,T} <: PenguinSolverCore.AbstractSystem
 
     tmp_gamma::Vector{T}
     tmp_omega::Vector{T}
+    tmp_full_omega::Vector{T}
+    tmp_full_gamma::Vector{T}
+    tmp_full_out::Vector{T}
+
+    matrixfree_unsteady::Bool
 
     diffusion_dirty::Bool
     constraints_dirty::Bool
@@ -149,4 +156,9 @@ function _refresh_dirichlet_cache!(sys::DiffusionSystem{N,T}) where {N,T}
         sys.dirichlet_affine[i] = convert(T, b_full[idx_omega[i]])
     end
     return nothing
+end
+
+function enable_matrixfree_unsteady!(sys::DiffusionSystem, enabled::Bool=true)
+    sys.matrixfree_unsteady = enabled
+    return sys
 end

@@ -35,9 +35,13 @@ end
 function PenguinSolverCore.rhs!(du, sys::DiffusionSystem, u, p, t)
     sys.gfun === nothing || _set_r_gamma!(sys, _evaluate_callable(sys.gfun, sys, u, p, t))
 
-    apply_L!(du, sys, u)
-    @inbounds for i in eachindex(du)
-        du[i] += sys.dirichlet_affine[i]
+    if sys.matrixfree_unsteady
+        apply_L_matrixfree!(du, sys, u)
+    else
+        apply_L!(du, sys, u)
+        @inbounds for i in eachindex(du)
+            du[i] += sys.dirichlet_affine[i]
+        end
     end
 
     if sys.sourcefun !== nothing

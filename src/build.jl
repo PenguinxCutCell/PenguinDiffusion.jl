@@ -93,8 +93,11 @@ function build_system(
     vtol::Union{Nothing,Real} = nothing,
     igamma_tol::Union{Nothing,Real} = nothing,
     kappa_averaging::Symbol = :harmonic,
+    matrixfree_unsteady::Bool = false,
 ) where {N,T}
     ops = CartesianOperators.assembled_ops(moments; bc=prob.bc)
+    kops = CartesianOperators.kernel_ops(moments; bc=prob.bc)
+    kwork = CartesianOperators.KernelWork(kops)
     interface = _normalize_robin_interface(prob.interface, T)
 
     V = T.(moments.V)
@@ -124,6 +127,13 @@ function build_system(
         gamma_mask[i] = (ops.Iγ[i] > igamma_tol_local) && omega_mask[i]
     end
     gamma_active = findall(gamma_mask)
+    if isempty(gamma_active)
+        has_cut = any((moments.cell_type .== 0) .& .!pad_mask) &&
+                  any((moments.cell_type .!= 0) .& .!pad_mask)
+        if has_cut
+            @warn "No interface DOFs detected (n_gamma=0). Interface may align with grid so Robin constraints are inactive at this resolution; convergence can oscillate badly. Consider changing geometry offset or refinement."
+        end
+    end
 
     dof_omega = PenguinSolverCore.DofMap(omega_active)
     dof_gamma = PenguinSolverCore.DofMap(gamma_active)
@@ -155,6 +165,8 @@ function build_system(
         PenguinSolverCore.UpdateManager(),
         moments,
         ops,
+        kops,
+        kwork,
         interface,
         dof_omega,
         dof_gamma,
@@ -175,8 +187,20 @@ function build_system(
         dirichlet_affine,
         zeros(T, length(dof_gamma.indices)),
         zeros(T, length(dof_omega.indices)),
+        zeros(T, ops.Nd),
+        zeros(T, ops.Nd),
+        zeros(T, ops.Nd),
+        matrixfree_unsteady,
         false,
         false,
         0,
     )
+end
+
+function build_matrixfree_system(
+    moments::CartesianGeometry.GeometricMoments,
+    prob::DiffusionProblem;
+    kwargs...,
+)
+    return build_system(moments, prob; matrixfree_unsteady=true, kwargs...)
 end
