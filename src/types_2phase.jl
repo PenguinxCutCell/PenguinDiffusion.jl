@@ -21,6 +21,10 @@ mutable struct TwoPhaseDiffusionSystem{N,T} <: PenguinSolverCore.AbstractSystem
 
     ops1::CartesianOperators.AssembledOps{N,T}
     ops2::CartesianOperators.AssembledOps{N,T}
+    kops1::CartesianOperators.KernelOps{N,T}
+    kwork1::CartesianOperators.KernelWork{T}
+    kops2::CartesianOperators.KernelOps{N,T}
+    kwork2::CartesianOperators.KernelWork{T}
 
     dof_omega1::PenguinSolverCore.DofMap{Int}
     dof_omega2::PenguinSolverCore.DofMap{Int}
@@ -61,6 +65,14 @@ mutable struct TwoPhaseDiffusionSystem{N,T} <: PenguinSolverCore.AbstractSystem
     tmp_gamma::Vector{T}
     tmp1::Vector{T}
     tmp2::Vector{T}
+    tmp_full_omega1::Vector{T}
+    tmp_full_gamma1::Vector{T}
+    tmp_full_out1::Vector{T}
+    tmp_full_omega2::Vector{T}
+    tmp_full_gamma2::Vector{T}
+    tmp_full_out2::Vector{T}
+
+    matrixfree_unsteady::Bool
 
     diffusion_dirty::Bool
     constraints_dirty::Bool
@@ -138,4 +150,9 @@ function _refresh_two_phase_rhs!(sys::TwoPhaseDiffusionSystem{N,T}) where {N,T}
         sys.r[nγ + i] = Iγi * sys.scalarjump.g[idx]
     end
     return sys.r
+end
+
+function enable_matrixfree_unsteady!(sys::TwoPhaseDiffusionSystem, enabled::Bool=true)
+    sys.matrixfree_unsteady = enabled
+    return sys
 end

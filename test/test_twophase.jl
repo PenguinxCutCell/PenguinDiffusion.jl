@@ -7,7 +7,7 @@ function build_two_phase_moments()
     return moments1, moments2
 end
 
-function build_two_phase_system(; kappa1=1.0, kappa2=1.4, source1=nothing, source2=nothing)
+function build_two_phase_system(; kappa1=1.0, kappa2=1.4, source1=nothing, source2=nothing, matrixfree_unsteady=false)
     moments1, moments2 = build_two_phase_moments()
     bc1 = CartesianOperators.BoxBC(Val(2), Float64)
     bc2 = CartesianOperators.BoxBC(Val(2), Float64)
@@ -16,6 +16,9 @@ function build_two_phase_system(; kappa1=1.0, kappa2=1.4, source1=nothing, sourc
     fluxjump = CartesianOperators.FluxJumpConstraint(ones(Float64, Nd), -ones(Float64, Nd), zeros(Float64, Nd))
     scalarjump = CartesianOperators.ScalarJumpConstraint(ones(Float64, Nd), -ones(Float64, Nd), zeros(Float64, Nd))
     prob = PenguinDiffusion.TwoPhaseDiffusionProblem(kappa1, kappa2, bc1, bc2, fluxjump, scalarjump, source1, source2)
+    if matrixfree_unsteady
+        return PenguinDiffusion.build_matrixfree_system(moments1, moments2, prob)
+    end
     return PenguinDiffusion.build_system(moments1, moments2, prob)
 end
 

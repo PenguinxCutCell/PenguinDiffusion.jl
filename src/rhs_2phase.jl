@@ -42,13 +42,16 @@ function PenguinSolverCore.rhs!(du, sys::TwoPhaseDiffusionSystem, u, p, t)
     length(u) == nω || throw(DimensionMismatch("state length $(length(u)) != $nω"))
     length(du) == nω || throw(DimensionMismatch("rhs length $(length(du)) != $nω"))
 
-    apply_L!(du, sys, u)
-
-    @inbounds for i in 1:nω1
-        du[i] += sys.dir_aff1[i]
-    end
-    @inbounds for i in 1:nω2
-        du[nω1 + i] += sys.dir_aff2[i]
+    if sys.matrixfree_unsteady
+        apply_L_matrixfree!(du, sys, u)
+    else
+        apply_L!(du, sys, u)
+        @inbounds for i in 1:nω1
+            du[i] += sys.dir_aff1[i]
+        end
+        @inbounds for i in 1:nω2
+            du[nω1 + i] += sys.dir_aff2[i]
+        end
     end
 
     if sys.sourcefun1 !== nothing

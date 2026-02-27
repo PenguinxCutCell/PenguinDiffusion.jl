@@ -179,9 +179,14 @@ function build_system(
     vtol::Union{Nothing,Real}=nothing,
     igamma_tol::Union{Nothing,Real}=nothing,
     kappa_averaging::Symbol=:harmonic,
+    matrixfree_unsteady::Bool=false,
 ) where {N,T}
     ops1 = CartesianOperators.assembled_ops(moments1; bc=prob.bc1)
     ops2 = CartesianOperators.assembled_ops(moments2; bc=prob.bc2)
+    kops1 = CartesianOperators.kernel_ops(moments1; bc=prob.bc1)
+    kops2 = CartesianOperators.kernel_ops(moments2; bc=prob.bc2)
+    kwork1 = CartesianOperators.KernelWork(kops1)
+    kwork2 = CartesianOperators.KernelWork(kops2)
 
     ops1.Nd == ops2.Nd || throw(DimensionMismatch("ops1/ops2 Nd mismatch"))
     ops1.dims == ops2.dims || throw(DimensionMismatch("ops1/ops2 dims mismatch"))
@@ -282,6 +287,10 @@ function build_system(
         moments2,
         ops1,
         ops2,
+        kops1,
+        kwork1,
+        kops2,
+        kwork2,
         dof_omega1,
         dof_omega2,
         dof_gamma,
@@ -312,8 +321,24 @@ function build_system(
         zeros(T, 2 * nγ),
         zeros(T, nω1),
         zeros(T, nω2),
+        zeros(T, Nd),
+        zeros(T, Nd),
+        zeros(T, Nd),
+        zeros(T, Nd),
+        zeros(T, Nd),
+        zeros(T, Nd),
+        matrixfree_unsteady,
         false,
         false,
         0,
     )
+end
+
+function build_matrixfree_system(
+    moments1::CartesianGeometry.GeometricMoments,
+    moments2::CartesianGeometry.GeometricMoments,
+    prob::TwoPhaseDiffusionProblem;
+    kwargs...,
+)
+    return build_system(moments1, moments2, prob; matrixfree_unsteady=true, kwargs...)
 end

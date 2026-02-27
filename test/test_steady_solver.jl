@@ -81,3 +81,33 @@ end
     sys = build_steady_test_system(; kappa=0.0, source=1.0)
     @test_throws ArgumentError PenguinDiffusion.steady_solve(sys)
 end
+
+@testset "steady solve does not depend on assembled diffusion blocks" begin
+    source_value = 0.35
+    sys_ref = build_steady_test_system(; source=source_value)
+    sys_mf = build_steady_test_system(; source=source_value)
+
+    sol_ref = PenguinDiffusion.steady_solve(
+        sys_ref;
+        alg=LinearSolve.SimpleGMRES(),
+        abstol=1e-12,
+        reltol=1e-12,
+        maxiters=10_000,
+    )
+
+    fill!(sys_mf.L_oo.nzval, 0.0)
+    fill!(sys_mf.L_og.nzval, 0.0)
+    fill!(sys_mf.dirichlet_affine, 7.0)
+
+    sol_mf = PenguinDiffusion.steady_solve(
+        sys_mf;
+        alg=LinearSolve.SimpleGMRES(),
+        abstol=1e-12,
+        reltol=1e-12,
+        maxiters=10_000,
+    )
+
+    @test SciMLBase.successful_retcode(sol_ref)
+    @test SciMLBase.successful_retcode(sol_mf)
+    @test isapprox(sol_mf.u, sol_ref.u; atol=1e-9, rtol=1e-9)
+end
