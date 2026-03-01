@@ -58,8 +58,8 @@ function main()
     # Domain and disk geometry.
     lx = 1.0
     ly = 1.0
-    nx = 20
-    ny = 20
+    nx = 8
+    ny = nx
     radius = ly / 4
     center = (lx / 2, ly / 2)
 
@@ -95,7 +95,7 @@ function main()
         OrdinaryDiffEq.Rosenbrock23(autodiff=false);
         reltol=1e-8,
         abstol=1e-8,
-        saveat=range(tspan[1], tspan[2]; length=11),
+        saveat=range(tspan[1], tspan[2]; length=2),
     )
     SciMLBase.successful_retcode(sol) || error("time integration failed with retcode=$(sol.retcode)")
 

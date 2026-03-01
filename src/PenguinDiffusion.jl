@@ -15,6 +15,7 @@ include("build_2phase.jl")
 include("reduction.jl")
 include("reduction_2phase.jl")
 include("unsteady_matrixfree.jl")
+include("unsteady_block.jl")
 include("rhs.jl")
 include("rhs_2phase.jl")
 include("rebuild.jl")
@@ -39,5 +40,6 @@ export Kappa1Updater, Kappa2Updater
 export BoxDirichletUpdater1, BoxDirichletUpdater2
 export Source1Updater, Source2Updater
 export steady_linear_problem, steady_solve
+export unsteady_block_matrix, unsteady_block_solve
 
 end

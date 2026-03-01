@@ -40,7 +40,7 @@ function main()
     g_robin = a * (1.0 + R^2) + b * kappa * (2.0 * R)
 
     # Grid / moments.
-    n = 32
+    n = 
     x = collect(range(0.0, 1.0; length=n))
     y = collect(range(0.0, 1.0; length=n))
 
@@ -73,7 +73,7 @@ function main()
     u_reduced = sol.u
 
     active = sys.dof_omega.indices
-    V_active = Float64.(sys.moments.V[active])
+    V_active = Float64.(sys.moments.V)
 
     u_full, _gamma_full = full_state(sys, u_reduced)
 
@@ -86,8 +86,8 @@ function main()
         u_exact_full[i] = 1.0 + r2
     end
 
-    err = u_full[active] .- u_exact_full[active]
-    ref = u_exact_full[active]
+    err = u_full .- u_exact_full
+    ref = u_exact_full
     rel_l2 = sqrt(sum(V_active .* (err .^ 2)) / sum(V_active .* (ref .^ 2)))
     max_abs = maximum(abs, err)
 
