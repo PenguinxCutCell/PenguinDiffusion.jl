@@ -19,6 +19,7 @@ makedocs(
         "Examples" => "examples.md",
         "Validation" => "validation.md",
         "Design Notes" => "design.md",
+        "References" => "references.md",
     ],
     pagesonly = true,
     warnonly = false,
