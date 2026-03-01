@@ -12,6 +12,9 @@ It supports monophasic and two-phase diffusion with reduced-state unknowns on ac
 - Steady solve helpers (`steady_linear_problem`, `steady_solve`) based on `LinearSolve.jl`.
 - Unsteady integration through `PenguinSolverCore` + SciML (`sciml_odeproblem`, `rhs!`, `mass_matrix`).
 - Matrix-free unsteady path (`build_matrixfree_system`, `enable_matrixfree_unsteady!`).
+- Assembled block unsteady solvers:
+  - Monophasic: `unsteady_block_matrix`, `unsteady_block_solve`
+  - Diphasic: `diphasic_unsteady_block_matrix`, `diphasic_unsteady_block_solve`
 - Runtime updater hooks for interface data, box Dirichlet values, diffusivity, and sources.
 
 ## Quickstart
@@ -86,6 +89,11 @@ Steady solve helpers:
 
 - `steady_linear_problem`, `steady_solve`
 
+Assembled block unsteady helpers:
+
+- `unsteady_block_matrix`, `unsteady_block_solve`
+- `diphasic_unsteady_block_matrix`, `diphasic_unsteady_block_solve`
+
 ## Validation Coverage (tests)
 
 Current tests cover:
@@ -118,6 +126,7 @@ Included scripts:
 - `examples/one_d_continuous_body_halfspace_boxbc.jl`
 - `examples/twophase_square_circle_continuity_steady.jl`
 - `examples/twophase_square_circle_continuity_unsteady.jl`
+- `examples/heat_2ph_2d_benchphaseflow.jl`
 
 ## Documentation
 

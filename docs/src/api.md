@@ -41,3 +41,10 @@ This page lists the package public API.
 
 - `steady_linear_problem`
 - `steady_solve`
+
+## Assembled Block Unsteady Helpers
+
+- `unsteady_block_matrix`
+- `unsteady_block_solve`
+- `diphasic_unsteady_block_matrix`
+- `diphasic_unsteady_block_solve`

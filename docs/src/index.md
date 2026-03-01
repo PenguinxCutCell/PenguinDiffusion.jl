@@ -9,6 +9,7 @@ Current capabilities include:
 - Steady solves via `LinearSolve`.
 - Unsteady solves via `PenguinSolverCore` + SciML ODE integration.
 - Matrix-free unsteady RHS path for large problems.
+- Assembled block unsteady solvers for monophasic and diphasic systems.
 
 ## Documentation Map
 

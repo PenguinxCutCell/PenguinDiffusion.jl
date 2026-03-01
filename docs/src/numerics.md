@@ -14,6 +14,19 @@ The package maintains internal full-grid caches for:
 
 - `build_system(...)` assembles the standard diffusion system.
 - `build_matrixfree_system(...)` builds the matrix-free unsteady path.
+- `unsteady_block_*` and `diphasic_unsteady_block_*` provide assembled block
+  fixed-step implicit time loops.
+
+## Two-Phase Flux/Scalar Jump Conventions
+
+For diphasic coupling:
+
+- Scalar jump rows enforce `α1*T1 + α2*T2 = g_scalar` at the interface.
+- Flux jump rows enforce `b1*q1 + b2*q2 = g_flux` with opposite phase normals.
+
+This means physical flux continuity `D1*∂nT1 = D2*∂nT2` maps to:
+
+- `FluxJumpConstraint(b1=D1, b2=-D2, g=0)`.
 
 ## Runtime Updates
 

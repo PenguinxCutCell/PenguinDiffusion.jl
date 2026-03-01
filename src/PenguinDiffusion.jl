@@ -41,5 +41,6 @@ export BoxDirichletUpdater1, BoxDirichletUpdater2
 export Source1Updater, Source2Updater
 export steady_linear_problem, steady_solve
 export unsteady_block_matrix, unsteady_block_solve
+export diphasic_unsteady_block_matrix, diphasic_unsteady_block_solve
 
 end
