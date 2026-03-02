@@ -2,9 +2,7 @@ using CartesianGeometry: geometric_moments, nan
 using CartesianOperators
 using PenguinBCs
 using PenguinDiffusion
-using PenguinSolverCore
 using Roots
-using SparseArrays
 using SpecialFunctions
 
 function active_physical_indices(cap)
@@ -89,25 +87,26 @@ function main()
     bc_interface = Robin(k, beta, k * Tinf)
 
     ops = DiffusionOps(cap; periodic=periodic_flags(bc_border, 2))
-    model = DiffusionModelMono(cap, ops, diffusivity; source=(x, y, t) -> 0.0, bc_border=bc_border, bc_interface=bc_interface)
+    model = DiffusionModelMono(cap, ops, diffusivity; source=0.0, bc_border=bc_border, bc_interface=bc_interface)
 
     lay = model.layout.offsets
     nsys = last(lay.γ)
-    sys = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
-    u = zeros(Float64, nsys)
+    u0 = zeros(Float64, nsys)
     idx = active_physical_indices(cap)
     for i in idx
-        u[lay.ω[i]] = T0
+        u0[lay.ω[i]] = T0
     end
 
-    time = 0.0
-    while time < t_end - 1e-12
-        dt_step = min(dt, t_end - time)
-        assemble_unsteady_mono!(sys, model, u, time, dt_step, 1.0)
-        PenguinSolverCore.solve!(sys; method=:direct, reuse_factorization=false)
-        u .= sys.x
-        time += dt_step
-    end
+    sol = solve_unsteady!(
+        model,
+        u0,
+        (0.0, t_end);
+        dt=dt,
+        scheme=:BE,
+        method=:direct,
+        save_history=false,
+    )
+    u = sol.system.x
 
     roots = robin_bessel_roots(80, k * radius)
     u_exact(x, y) = radial_heat_solution(
@@ -122,6 +121,7 @@ function main()
 
     println("Heat Robin in disk (unsteady)")
     println("  dt: ", dt, ", final time: ", t_end)
+    println("  reused constant operator: ", sol.reused_constant_operator)
     println("  active cells: ", length(idx))
     println("  center temperature (numerical): ", center_value)
     println("  volume-weighted L2 error at final time: ", err_l2)

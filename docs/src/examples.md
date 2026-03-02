@@ -21,6 +21,7 @@ Available diffusion examples
   - Embedded interface condition: Robin exchange to ambient temperature.
   - Analytical reference: radial Bessel-series solution at final time.
   - Check: volume-weighted `L2` error at final time.
+  - Uses `solve_unsteady!(...; scheme=:BE)`.
 
 - `examples/1D/Diffusion/Poisson_nobody_neumann_mms.jl`
   - 1D manufactured steady Poisson with no embedded body (`body = -1`).
@@ -33,6 +34,19 @@ Available diffusion examples
   - Embedded interface condition: Dirichlet implemented as `Robin(1, 0, g)`.
   - Outer box boundary conditions: Dirichlet from the same analytical solution.
   - Check: volume-weighted `L2` error and active-volume consistency.
+
+- `examples/1D/Diffusion/Poisson_2ph.jl`
+  - 1D diphasic steady Poisson with interface continuity constraints.
+  - Analytical reference: trivial manufactured solution `u1=u2=0`.
+  - Check: phase-wise volume-weighted `L2` errors.
+
+- `examples/2D/Diffusion/Heat_2ph.jl`
+  - 2D diphasic unsteady heat manufactured solution.
+  - Analytical references:
+    - `u1=exp(-2*pi^2*t)*sin(pi*x)sin(pi*y)`
+    - `u2=exp(-8*pi^2*t)*sin(2*pi*x)sin(2*pi*y)`
+  - Check: phase-wise volume-weighted `L2` errors at final time.
+  - Uses `solve_unsteady!(...; scheme=:CN)` and reports operator reuse.
 
 Regression tests
 

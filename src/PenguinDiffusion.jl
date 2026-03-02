@@ -11,7 +11,7 @@ using PenguinSolverCore
 export DiffusionModelMono, DiffusionModelDiph
 export assemble_steady_mono!, assemble_unsteady_mono!
 export assemble_steady_diph!, assemble_unsteady_diph!
-export solve_steady!
+export solve_steady!, solve_unsteady!
 
 struct DiffusionModelMono{N,T,DT,ST,IT}
     ops::DiffusionOps{N,T}
@@ -37,15 +37,43 @@ function DiffusionModelMono(
     )
 end
 
-struct DiffusionModelDiph{N,T,D1T,D2T,ST,IT}
-    ops::DiffusionOps{N,T}
-    cap::AssembledCapacity{N,T}
+struct DiffusionModelDiph{N,T,D1T,D2T,S1T,S2T,IT}
+    ops1::DiffusionOps{N,T}
+    cap1::AssembledCapacity{N,T}
     D1::D1T
+    source1::S1T
+    ops2::DiffusionOps{N,T}
+    cap2::AssembledCapacity{N,T}
     D2::D2T
-    source::ST
+    source2::S2T
     bc_border::BorderConditions
-    bc_interface::IT
+    ic::IT
     layout::UnknownLayout
+end
+
+function DiffusionModelDiph(
+    cap1::AssembledCapacity{N,T},
+    ops1::DiffusionOps{N,T},
+    D1,
+    source1,
+    cap2::AssembledCapacity{N,T},
+    ops2::DiffusionOps{N,T},
+    D2,
+    source2;
+    bc_border::BorderConditions=BorderConditions(),
+    ic::Union{Nothing,InterfaceConditions}=nothing,
+    bc_interface::Union{Nothing,InterfaceConditions}=nothing,
+    layout::UnknownLayout=layout_diph(cap1.ntotal),
+) where {N,T}
+    cap1.ntotal == cap2.ntotal || throw(ArgumentError("cap1 and cap2 must have identical ntotal"))
+    cap1.nnodes == cap2.nnodes || throw(ArgumentError("cap1 and cap2 must have identical nnodes"))
+    if !(ic === nothing) && !(bc_interface === nothing) && (ic !== bc_interface)
+        throw(ArgumentError("provide at most one interface condition via `ic` or `bc_interface`"))
+    end
+    ic_eff = ic === nothing ? bc_interface : ic
+    return DiffusionModelDiph{N,T,typeof(D1),typeof(D2),typeof(source1),typeof(source2),typeof(ic_eff)}(
+        ops1, cap1, D1, source1, ops2, cap2, D2, source2, bc_border, ic_eff, layout
+    )
 end
 
 function DiffusionModelDiph(
@@ -55,11 +83,39 @@ function DiffusionModelDiph(
     D2;
     source=((args...) -> (zero(T), zero(T))),
     bc_border::BorderConditions=BorderConditions(),
+    ic::Union{Nothing,InterfaceConditions}=nothing,
     bc_interface::Union{Nothing,InterfaceConditions}=nothing,
     layout::UnknownLayout=layout_diph(cap.ntotal),
 ) where {N,T}
-    return DiffusionModelDiph{N,T,typeof(D1),typeof(D2),typeof(source),typeof(bc_interface)}(
-        ops, cap, D1, D2, source, bc_border, bc_interface, layout
+    source1, source2 = if source isa Tuple && length(source) == 2
+        (source[1], source[2])
+    elseif source isa Function
+        (;
+            s1=(args...) -> begin
+                s = applicable(source, args...) ? source(args...) : source(args[1:(end - 1)]...)
+                s[1]
+            end,
+            s2=(args...) -> begin
+                s = applicable(source, args...) ? source(args...) : source(args[1:(end - 1)]...)
+                s[2]
+            end,
+        ) |> x -> (x.s1, x.s2)
+    else
+        throw(ArgumentError("diph source must be a function returning a tuple or a tuple of two callbacks/constants"))
+    end
+    return DiffusionModelDiph(
+        cap,
+        ops,
+        D1,
+        source1,
+        cap,
+        ops,
+        D2,
+        source2;
+        bc_border=bc_border,
+        ic=ic,
+        bc_interface=bc_interface,
+        layout=layout,
     )
 end
 
@@ -84,23 +140,14 @@ function _source_values_mono(cap::AssembledCapacity{N,T}, source, t::T) where {N
     return out
 end
 
-function _source_values_diph(cap::AssembledCapacity{N,T}, source, t::T) where {N,T}
-    f1 = Vector{T}(undef, cap.ntotal)
-    f2 = Vector{T}(undef, cap.ntotal)
-    @inbounds for i in eachindex(f1)
-        x = cap.C_ω[i]
-        if source isa Function
-            s = applicable(source, x..., t) ? source(x..., t) : source(x...)
-            f1[i] = convert(T, s[1])
-            f2[i] = convert(T, s[2])
-        elseif source isa Tuple && length(source) == 2
-            f1[i] = _eval_fun_or_const(source[1], x, t)
-            f2[i] = _eval_fun_or_const(source[2], x, t)
-        else
-            throw(ArgumentError("diph source must be a function returning a tuple or a tuple of two callbacks/constants"))
-        end
-    end
-    return f1, f2
+function _source_values_diph(
+    cap1::AssembledCapacity{N,T},
+    source1,
+    cap2::AssembledCapacity{N,T},
+    source2,
+    t::T,
+) where {N,T}
+    return _source_values_mono(cap1, source1, t), _source_values_mono(cap2, source2, t)
 end
 
 function _sample_coeff(cap::AssembledCapacity{N,T}, D, t::T) where {N,T}
@@ -137,51 +184,72 @@ function _interface_diagonals_mono(cap::AssembledCapacity{N,T}, ic::Union{Nothin
     return α, β, g
 end
 
-function _interface_diagonals_diph(cap::AssembledCapacity{N,T}, ic::Union{Nothing,InterfaceConditions}, t::T) where {N,T}
-    α1 = zeros(T, cap.ntotal)
-    α2 = zeros(T, cap.ntotal)
-    β1 = zeros(T, cap.ntotal)
-    β2 = zeros(T, cap.ntotal)
-    g = zeros(T, cap.ntotal)
-    ic === nothing && return α1, α2, β1, β2, g
+function _interface_coupling_diph(
+    cap1::AssembledCapacity{N,T},
+    cap2::AssembledCapacity{N,T},
+    ic::Union{Nothing,InterfaceConditions},
+    t::T,
+) where {N,T}
+    nt = cap1.ntotal
+    αs1 = zeros(T, nt)
+    αs2 = zeros(T, nt)
+    βs1 = zeros(T, nt)
+    βs2 = zeros(T, nt)
+    gs = zeros(T, nt)
 
-    mask = _interface_mask(cap)
-    @inbounds for i in eachindex(mask)
-        mask[i] || continue
-        x = cap.C_γ[i]
+    αf1 = zeros(T, nt)
+    αf2 = zeros(T, nt)
+    βf1 = zeros(T, nt)
+    βf2 = zeros(T, nt)
+    gf = zeros(T, nt)
+
+    ic === nothing && return αs1, αs2, βs1, βs2, gs, αf1, αf2, βf1, βf2, gf
+
+    tol = sqrt(eps(T))
+    @inbounds for i in 1:nt
+        γ1 = cap1.buf.Γ[i]
+        γ2 = cap2.buf.Γ[i]
+        active1 = isfinite(γ1) && γ1 > zero(T)
+        active2 = isfinite(γ2) && γ2 > zero(T)
+        if active1 != active2
+            throw(ArgumentError("cap1/cap2 interface masks differ at index $i"))
+        end
+        active1 || continue
+        if abs(γ1 - γ2) > tol * max(one(T), abs(γ1), abs(γ2))
+            throw(ArgumentError("cap1/cap2 interface measures differ at index $i"))
+        end
+
+        x = cap1.C_γ[i]
+
         if ic.scalar isa ScalarJump
-            α1[i] += convert(T, eval_bc(ic.scalar.α₁, x, t))
-            α2[i] += convert(T, eval_bc(ic.scalar.α₂, x, t))
-            g[i] = convert(T, eval_bc(ic.scalar.value, x, t))
+            αs1[i] = convert(T, eval_bc(ic.scalar.α₁, x, t))
+            αs2[i] = convert(T, eval_bc(ic.scalar.α₂, x, t))
+            gs[i] = convert(T, eval_bc(ic.scalar.value, x, t))
         elseif ic.scalar isa RobinJump
-            α1[i] += convert(T, eval_bc(ic.scalar.α, x, t))
-            α2[i] += convert(T, eval_bc(ic.scalar.α, x, t))
-            β1[i] += convert(T, eval_bc(ic.scalar.β, x, t))
-            β2[i] += convert(T, eval_bc(ic.scalar.β, x, t))
-            g[i] = convert(T, eval_bc(ic.scalar.value, x, t))
+            αs1[i] = convert(T, eval_bc(ic.scalar.α, x, t))
+            αs2[i] = convert(T, eval_bc(ic.scalar.α, x, t))
+            βs1[i] = convert(T, eval_bc(ic.scalar.β, x, t))
+            βs2[i] = convert(T, eval_bc(ic.scalar.β, x, t))
+            gs[i] = convert(T, eval_bc(ic.scalar.value, x, t))
         elseif !(ic.scalar === nothing)
             throw(ArgumentError("unsupported scalar interface condition type $(typeof(ic.scalar))"))
         end
 
         if ic.flux isa FluxJump
-            β1[i] += convert(T, eval_bc(ic.flux.β₁, x, t))
-            β2[i] += convert(T, eval_bc(ic.flux.β₂, x, t))
-            if ic.scalar === nothing
-                g[i] = convert(T, eval_bc(ic.flux.value, x, t))
-            end
+            βf1[i] = convert(T, eval_bc(ic.flux.β₁, x, t))
+            βf2[i] = convert(T, eval_bc(ic.flux.β₂, x, t))
+            gf[i] = convert(T, eval_bc(ic.flux.value, x, t))
         elseif ic.flux isa RobinJump
-            α1[i] += convert(T, eval_bc(ic.flux.α, x, t))
-            α2[i] += convert(T, eval_bc(ic.flux.α, x, t))
-            β1[i] += convert(T, eval_bc(ic.flux.β, x, t))
-            β2[i] += convert(T, eval_bc(ic.flux.β, x, t))
-            if ic.scalar === nothing
-                g[i] = convert(T, eval_bc(ic.flux.value, x, t))
-            end
+            αf1[i] = convert(T, eval_bc(ic.flux.α, x, t))
+            αf2[i] = convert(T, eval_bc(ic.flux.α, x, t))
+            βf1[i] = convert(T, eval_bc(ic.flux.β, x, t))
+            βf2[i] = convert(T, eval_bc(ic.flux.β, x, t))
+            gf[i] = convert(T, eval_bc(ic.flux.value, x, t))
         elseif !(ic.flux === nothing)
             throw(ArgumentError("unsupported flux interface condition type $(typeof(ic.flux))"))
         end
     end
-    return α1, α2, β1, β2, g
+    return αs1, αs2, βs1, βs2, gs, αf1, αf2, βf1, βf2, gf
 end
 
 function _insert_block!(A::SparseMatrixCSC{T,Int}, rows::UnitRange{Int}, cols::UnitRange{Int}, B::SparseMatrixCSC{T,Int}) where {T}
@@ -245,17 +313,16 @@ function _mono_row_activity(cap::AssembledCapacity{N,T}, lay) where {N,T}
     return active
 end
 
-function _diph_row_activity(cap::AssembledCapacity{N,T}, lay) where {N,T}
-    activeω, activeγ = _cell_activity_masks(cap)
+function _diph_row_activity(cap1::AssembledCapacity{N,T}, cap2::AssembledCapacity{N,T}, lay) where {N,T}
+    activeω1, activeγ1 = _cell_activity_masks(cap1)
+    activeω2, activeγ2 = _cell_activity_masks(cap2)
     nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
     active = falses(nsys)
-    @inbounds for i in 1:cap.ntotal
-        aω = activeω[i]
-        aγ = activeγ[i]
-        active[lay.ω1[i]] = aω
-        active[lay.γ1[i]] = aγ
-        active[lay.ω2[i]] = aω
-        active[lay.γ2[i]] = aγ
+    @inbounds for i in 1:cap1.ntotal
+        active[lay.ω1[i]] = activeω1[i]
+        active[lay.γ1[i]] = activeγ1[i]
+        active[lay.ω2[i]] = activeω2[i]
+        active[lay.γ2[i]] = activeγ2[i]
     end
     return active
 end
@@ -307,10 +374,10 @@ function _scale_rows!(A::SparseMatrixCSC{T,Int}, rows::UnitRange{Int}, α::T) wh
     return A
 end
 
-function _core_ops(model)
-    G = model.ops.G
-    H = model.ops.H
-    Winv = model.ops.Winv
+function _core_ops(ops::DiffusionOps)
+    G = ops.G
+    H = ops.H
+    Winv = ops.Winv
     K = G' * Winv * G
     C = G' * Winv * H
     J = H' * Winv * G
@@ -334,7 +401,7 @@ function assemble_steady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono{N
     lay = model.layout.offsets
     nsys = maximum((last(lay.ω), last(lay.γ)))
 
-    K, C, J, L = _core_ops(model)
+    K, C, J, L = _core_ops(model.ops)
     Dω = _sample_coeff(model.cap, model.D, t)
     fω = _source_values_mono(model.cap, model.source, t)
     α, β, gγ = _interface_diagonals_mono(model.cap, model.bc_interface, t)
@@ -420,81 +487,94 @@ function assemble_unsteady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono
 end
 
 function assemble_steady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N,T}, t::T) where {N,T}
-    nt = model.cap.ntotal
+    nt = model.cap1.ntotal
     lay = model.layout.offsets
     nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
 
-    K, C, J, L = _core_ops(model)
-    D1 = _sample_coeff(model.cap, model.D1, t)
-    D2 = _sample_coeff(model.cap, model.D2, t)
-    f1, f2 = _source_values_diph(model.cap, model.source, t)
-    α1, α2, β1, β2, gγ = _interface_diagonals_diph(model.cap, model.bc_interface, t)
+    K1, C1, J1, L1 = _core_ops(model.ops1)
+    K2, C2, J2, L2 = _core_ops(model.ops2)
+
+    D1 = _sample_coeff(model.cap1, model.D1, t)
+    D2 = _sample_coeff(model.cap2, model.D2, t)
+    f1, f2 = _source_values_diph(model.cap1, model.source1, model.cap2, model.source2, t)
+    αs1, αs2, βs1, βs2, gs, αf1, αf2, βf1, βf2, gf = _interface_coupling_diph(model.cap1, model.cap2, model.ic, t)
 
     ID1 = spdiagm(0 => D1)
     ID2 = spdiagm(0 => D2)
-    Iβ1 = spdiagm(0 => β1)
-    Iβ2 = spdiagm(0 => β2)
-    Iα1 = spdiagm(0 => α1)
-    Iα2 = spdiagm(0 => α2)
-    Iγ = model.cap.Γ
+    Iαs1 = spdiagm(0 => αs1)
+    Iαs2 = spdiagm(0 => αs2)
+    Iβs1 = spdiagm(0 => βs1)
+    Iβs2 = spdiagm(0 => βs2)
+    Iαf1 = spdiagm(0 => αf1)
+    Iαf2 = spdiagm(0 => αf2)
+    Iβf1 = spdiagm(0 => βf1)
+    Iβf2 = spdiagm(0 => βf2)
+    IΓ1 = model.cap1.Γ
+    IΓ2 = model.cap2.Γ
 
-    Aωω1 = ID1 * K
-    Aωγ1 = ID1 * C
-    Aγω1 = Iβ1 * J
-    Aγγ1 = Iβ1 * L + Iα1 * Iγ
+    A = spzeros(T, nsys, nsys)
+    b = zeros(T, nsys)
 
-    Aωω2 = ID2 * K
-    Aωγ2 = ID2 * C
-    Aγω2 = Iβ2 * J
-    Aγγ2 = Iβ2 * L + Iα2 * Iγ
-    if model.bc_interface === nothing
-        Aωγ1 = spzeros(T, nt, nt)
-        Aγω1 = spzeros(T, nt, nt)
-        Aγγ1 = spdiagm(0 => ones(T, nt))
-        Aωγ2 = spzeros(T, nt, nt)
-        Aγω2 = spzeros(T, nt, nt)
-        Aγγ2 = spdiagm(0 => ones(T, nt))
-    end
+    Aωω1 = ID1 * K1
+    Aωγ1 = ID1 * C1
+    Aωω2 = ID2 * K2
+    Aωγ2 = ID2 * C2
+    _insert_block!(A, lay.ω1, lay.ω1, Aωω1)
+    _insert_block!(A, lay.ω1, lay.γ1, Aωγ1)
+    _insert_block!(A, lay.ω2, lay.ω2, Aωω2)
+    _insert_block!(A, lay.ω2, lay.γ2, Aωγ2)
 
-    bω1 = model.cap.V * f1
-    bγ1 = Iγ * gγ
-    bω2 = model.cap.V * f2
-    bγ2 = Iγ * gγ
-
-    A, b = if _is_canonical_diph_layout(lay, nt)
-        Aphase1 = [Aωω1 Aωγ1; Aγω1 Aγγ1]
-        Aphase2 = [Aωω2 Aωγ2; Aγω2 Aγγ2]
-        (blockdiag(Aphase1, Aphase2), vcat(bω1, bγ1, bω2, bγ2))
+    if model.ic === nothing
+        _insert_block!(A, lay.γ1, lay.γ1, spdiagm(0 => ones(T, nt)))
+        _insert_block!(A, lay.γ2, lay.γ2, spdiagm(0 => ones(T, nt)))
     else
-        Awork = spzeros(T, nsys, nsys)
-        bwork = zeros(T, nsys)
-        _insert_block!(Awork, lay.ω1, lay.ω1, Aωω1)
-        _insert_block!(Awork, lay.ω1, lay.γ1, Aωγ1)
-        _insert_block!(Awork, lay.γ1, lay.ω1, Aγω1)
-        _insert_block!(Awork, lay.γ1, lay.γ1, Aγγ1)
+        has_scalar = !(model.ic.scalar === nothing)
+        has_flux = !(model.ic.flux === nothing)
 
-        _insert_block!(Awork, lay.ω2, lay.ω2, Aωω2)
-        _insert_block!(Awork, lay.ω2, lay.γ2, Aωγ2)
-        _insert_block!(Awork, lay.γ2, lay.ω2, Aγω2)
-        _insert_block!(Awork, lay.γ2, lay.γ2, Aγγ2)
+        if has_scalar
+            Aγ1ω1 = Iβs1 * J1
+            Aγ1γ1 = Iβs1 * L1 - Iαs1
+            Aγ1ω2 = -(Iβs2 * J2)
+            Aγ1γ2 = -(Iβs2 * L2) + Iαs2
 
-        _insert_vec!(bwork, lay.ω1, bω1)
-        _insert_vec!(bwork, lay.γ1, bγ1)
-        _insert_vec!(bwork, lay.ω2, bω2)
-        _insert_vec!(bwork, lay.γ2, bγ2)
-        (Awork, bwork)
+            _insert_block!(A, lay.γ1, lay.ω1, Aγ1ω1)
+            _insert_block!(A, lay.γ1, lay.γ1, Aγ1γ1)
+            _insert_block!(A, lay.γ1, lay.ω2, Aγ1ω2)
+            _insert_block!(A, lay.γ1, lay.γ2, Aγ1γ2)
+            _insert_vec!(b, lay.γ1, gs)
+        else
+            _insert_block!(A, lay.γ1, lay.γ1, spdiagm(0 => ones(T, nt)))
+        end
+
+        if has_flux
+            Aγ2ω1 = Iβf1 * J1
+            Aγ2γ1 = Iβf1 * L1 - Iαf1
+            Aγ2ω2 = Iβf2 * J2
+            Aγ2γ2 = Iβf2 * L2 + Iαf2
+
+            _insert_block!(A, lay.γ2, lay.ω1, Aγ2ω1)
+            _insert_block!(A, lay.γ2, lay.γ1, Aγ2γ1)
+            _insert_block!(A, lay.γ2, lay.ω2, Aγ2ω2)
+            _insert_block!(A, lay.γ2, lay.γ2, Aγ2γ2)
+            _insert_vec!(b, lay.γ2, gf)
+        else
+            _insert_block!(A, lay.γ2, lay.γ2, spdiagm(0 => ones(T, nt)))
+        end
     end
+
+    _insert_vec!(b, lay.ω1, model.cap1.V * f1)
+    _insert_vec!(b, lay.ω2, model.cap2.V * f2)
 
     sys.A = A
     sys.b = b
     length(sys.x) == nsys || (sys.x = zeros(T, nsys))
     sys.cache = nothing
 
-    layω1 = UnknownLayout(model.cap.ntotal, (ω=lay.ω1,))
-    layω2 = UnknownLayout(model.cap.ntotal, (ω=lay.ω2,))
-    apply_box_bc_mono!(sys.A, sys.b, model.cap, model.ops, model.D1, model.bc_border; t=t, layout=layω1)
-    apply_box_bc_mono!(sys.A, sys.b, model.cap, model.ops, model.D2, model.bc_border; t=t, layout=layω2)
-    active_rows = _diph_row_activity(model.cap, lay)
+    layω1 = UnknownLayout(model.cap1.ntotal, (ω=lay.ω1,))
+    layω2 = UnknownLayout(model.cap2.ntotal, (ω=lay.ω2,))
+    apply_box_bc_mono!(sys.A, sys.b, model.cap1, model.ops1, model.D1, model.bc_border; t=t, layout=layω1)
+    apply_box_bc_mono!(sys.A, sys.b, model.cap2, model.ops2, model.D2, model.bc_border; t=t, layout=layω2)
+    active_rows = _diph_row_activity(model.cap1, model.cap2, lay)
     sys.A, sys.b = _apply_row_identity_constraints!(sys.A, sys.b, active_rows)
     return sys
 end
@@ -504,7 +584,7 @@ function assemble_unsteady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph
     assemble_steady_diph!(sys, model, t + θ * dt)
 
     lay = model.layout.offsets
-    nt = model.cap.ntotal
+    nt = model.cap1.ntotal
     nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
 
     ufull = if length(uⁿ) == nsys
@@ -532,16 +612,17 @@ function assemble_unsteady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph
         _insert_vec!(sys.b, lay.ω2, (-(one(T) - θ)) .* corr2)
     end
 
-    M = model.cap.buf.V ./ dt
+    M1 = model.cap1.buf.V ./ dt
+    M2 = model.cap2.buf.V ./ dt
     rows = vcat(collect(lay.ω1), collect(lay.ω2))
-    vals = vcat(M, M)
+    vals = vcat(M1, M2)
     sys.A = sys.A + sparse(rows, rows, vals, nsys, nsys)
 
     u1 = Vector{T}(ufull[lay.ω1])
     u2 = Vector{T}(ufull[lay.ω2])
-    _insert_vec!(sys.b, lay.ω1, M .* u1)
-    _insert_vec!(sys.b, lay.ω2, M .* u2)
-    active_rows = _diph_row_activity(model.cap, lay)
+    _insert_vec!(sys.b, lay.ω1, M1 .* u1)
+    _insert_vec!(sys.b, lay.ω2, M2 .* u2)
+    active_rows = _diph_row_activity(model.cap1, model.cap2, lay)
     sys.A, sys.b = _apply_row_identity_constraints!(sys.A, sys.b, active_rows)
     sys.cache = nothing
     return sys
@@ -570,6 +651,375 @@ function solve_steady!(model::DiffusionModelDiph{N,T}; t::T=zero(T), method::Sym
     assemble_steady_diph!(sys, model, t)
     solve!(sys; method=method, kwargs...)
     return sys
+end
+
+function _theta_from_scheme(::Type{T}, scheme) where {T}
+    if scheme isa Symbol
+        if scheme === :BE
+            return one(T)
+        elseif scheme === :CN
+            return convert(T, 0.5)
+        end
+        throw(ArgumentError("unknown scheme `$scheme`; expected :BE or :CN"))
+    elseif scheme isa Real
+        return convert(T, scheme)
+    end
+    throw(ArgumentError("scheme must be a Symbol (:BE/:CN) or a numeric theta"))
+end
+
+function _value_time_dependent(v, x::SVector{N,T}) where {N,T}
+    return v isa Function && applicable(v, x..., zero(T))
+end
+
+function _coeff_time_dependent(D, x::SVector{N,T}) where {N,T}
+    if D isa Function
+        return applicable(D, x..., zero(T)) || applicable(D, 1, zero(T))
+    end
+    return false
+end
+
+function _source_mono_time_dependent(source, x::SVector{N,T}) where {N,T}
+    return source isa Function && applicable(source, x..., zero(T))
+end
+
+function _source_diph_time_dependent(source, x::SVector{N,T}) where {N,T}
+    if source isa Function
+        return applicable(source, x..., zero(T))
+    elseif source isa Tuple && length(source) == 2
+        return _value_time_dependent(source[1], x) || _value_time_dependent(source[2], x)
+    end
+    return false
+end
+
+function _border_values_time_dependent(bc::BorderConditions, x::SVector{N,T}) where {N,T}
+    for side_bc in values(bc.borders)
+        if side_bc isa Dirichlet || side_bc isa Neumann
+            _value_time_dependent(side_bc.value, x) && return true
+        elseif side_bc isa Robin
+            (_value_time_dependent(side_bc.α, x) ||
+             _value_time_dependent(side_bc.β, x) ||
+             _value_time_dependent(side_bc.value, x)) && return true
+        end
+    end
+    return false
+end
+
+function _interface_mono_matrix_time_dependent(ic::Union{Nothing,PenguinBCs.Robin}, x::SVector{N,T}) where {N,T}
+    ic === nothing && return false
+    return _value_time_dependent(ic.α, x) || _value_time_dependent(ic.β, x)
+end
+
+function _interface_mono_rhs_time_dependent(ic::Union{Nothing,PenguinBCs.Robin}, x::SVector{N,T}) where {N,T}
+    ic === nothing && return false
+    return _value_time_dependent(ic.value, x)
+end
+
+function _interface_diph_matrix_time_dependent(ic::Union{Nothing,InterfaceConditions}, x::SVector{N,T}) where {N,T}
+    ic === nothing && return false
+    for comp in (ic.scalar, ic.flux)
+        comp === nothing && continue
+        if comp isa ScalarJump
+            (_value_time_dependent(comp.α₁, x) || _value_time_dependent(comp.α₂, x)) && return true
+        elseif comp isa FluxJump
+            (_value_time_dependent(comp.β₁, x) || _value_time_dependent(comp.β₂, x)) && return true
+        elseif comp isa RobinJump
+            (_value_time_dependent(comp.α, x) || _value_time_dependent(comp.β, x)) && return true
+        end
+    end
+    return false
+end
+
+function _interface_diph_rhs_time_dependent(ic::Union{Nothing,InterfaceConditions}, x::SVector{N,T}) where {N,T}
+    ic === nothing && return false
+    for comp in (ic.scalar, ic.flux)
+        comp === nothing && continue
+        _value_time_dependent(comp.value, x) && return true
+    end
+    return false
+end
+
+function _mono_matrix_time_dependent(model::DiffusionModelMono{N,T}) where {N,T}
+    xω = model.cap.C_ω[1]
+    xγ = model.cap.C_γ[1]
+    return _coeff_time_dependent(model.D, xω) ||
+           _interface_mono_matrix_time_dependent(model.bc_interface, xγ)
+end
+
+function _mono_rhs_time_dependent(model::DiffusionModelMono{N,T}) where {N,T}
+    xω = model.cap.C_ω[1]
+    xγ = model.cap.C_γ[1]
+    return _source_mono_time_dependent(model.source, xω) ||
+           _border_values_time_dependent(model.bc_border, xω) ||
+           _interface_mono_rhs_time_dependent(model.bc_interface, xγ)
+end
+
+function _diph_matrix_time_dependent(model::DiffusionModelDiph{N,T}) where {N,T}
+    xω1 = model.cap1.C_ω[1]
+    xω2 = model.cap2.C_ω[1]
+    xγ = model.cap1.C_γ[1]
+    return _coeff_time_dependent(model.D1, xω1) ||
+        _coeff_time_dependent(model.D2, xω2) ||
+        _interface_diph_matrix_time_dependent(model.ic, xγ)
+end
+
+function _diph_rhs_time_dependent(model::DiffusionModelDiph{N,T}) where {N,T}
+    xω1 = model.cap1.C_ω[1]
+    xω2 = model.cap2.C_ω[1]
+    xγ = model.cap1.C_γ[1]
+    return _source_mono_time_dependent(model.source1, xω1) ||
+        _source_mono_time_dependent(model.source2, xω2) ||
+        _border_values_time_dependent(model.bc_border, xω1) ||
+        _interface_diph_rhs_time_dependent(model.ic, xγ)
+end
+
+function _init_unsteady_state_mono(model::DiffusionModelMono{N,T}, u0) where {N,T}
+    lay = model.layout.offsets
+    nt = model.cap.ntotal
+    nsys = maximum((last(lay.ω), last(lay.γ)))
+    u = zeros(T, nsys)
+    if length(u0) == nsys
+        u .= Vector{T}(u0)
+    elseif length(u0) == nt
+        u[lay.ω] .= Vector{T}(u0)
+    else
+        throw(DimensionMismatch("u0 length must be $nt (ω block) or $nsys (full system)"))
+    end
+    return u
+end
+
+function _init_unsteady_state_diph(model::DiffusionModelDiph{N,T}, u0) where {N,T}
+    lay = model.layout.offsets
+    nt = model.cap1.ntotal
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+    u = zeros(T, nsys)
+    if length(u0) == nsys
+        u .= Vector{T}(u0)
+    elseif length(u0) == 2 * nt
+        u0v = Vector{T}(u0)
+        u[lay.ω1] .= u0v[1:nt]
+        u[lay.ω2] .= u0v[(nt + 1):(2 * nt)]
+    else
+        throw(DimensionMismatch("u0 length must be $(2 * nt) (ω1+ω2) or $nsys (full system)"))
+    end
+    return u
+end
+
+function _prepare_constant_unsteady_mono(model::DiffusionModelMono{N,T}, t0::T, dt::T, θ::T) where {N,T}
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω), last(lay.γ)))
+    sys0 = LinearSystem(spzeros(T, nsys, nsys), zeros(T, nsys))
+    assemble_steady_mono!(sys0, model, t0 + θ * dt)
+    Asteady = sys0.A
+    bsteady = copy(sys0.b)
+    Aconst = copy(Asteady)
+    θ != one(T) && _scale_rows!(Aconst, lay.ω, θ)
+    M = model.cap.buf.V ./ dt
+    Aconst = Aconst + sparse(lay.ω, lay.ω, M, nsys, nsys)
+    Aω_prev = Asteady[lay.ω, :]
+    return Aconst, bsteady, Aω_prev, M
+end
+
+function _prepare_constant_unsteady_diph(model::DiffusionModelDiph{N,T}, t0::T, dt::T, θ::T) where {N,T}
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+    sys0 = LinearSystem(spzeros(T, nsys, nsys), zeros(T, nsys))
+    assemble_steady_diph!(sys0, model, t0 + θ * dt)
+    Asteady = sys0.A
+    bsteady = copy(sys0.b)
+    Aconst = copy(Asteady)
+    θ != one(T) && _scale_rows!(Aconst, lay.ω1, θ)
+    θ != one(T) && _scale_rows!(Aconst, lay.ω2, θ)
+    M1 = model.cap1.buf.V ./ dt
+    M2 = model.cap2.buf.V ./ dt
+    rows = vcat(collect(lay.ω1), collect(lay.ω2))
+    vals = vcat(M1, M2)
+    Aconst = Aconst + sparse(rows, rows, vals, nsys, nsys)
+    Aω1_prev = Asteady[lay.ω1, :]
+    Aω2_prev = Asteady[lay.ω2, :]
+    return Aconst, bsteady, Aω1_prev, Aω2_prev, M1, M2
+end
+
+function _set_constant_rhs_mono!(
+    b::Vector{T},
+    bsteady::Vector{T},
+    Aω_prev::SparseMatrixCSC{T,Int},
+    M::Vector{T},
+    lay,
+    u::Vector{T},
+    θ::T,
+) where {T}
+    copyto!(b, bsteady)
+    if θ != one(T)
+        corr = Aω_prev * u
+        _insert_vec!(b, lay.ω, (-(one(T) - θ)) .* corr)
+    end
+    _insert_vec!(b, lay.ω, M .* Vector{T}(u[lay.ω]))
+    return b
+end
+
+function _set_constant_rhs_diph!(
+    b::Vector{T},
+    bsteady::Vector{T},
+    Aω1_prev::SparseMatrixCSC{T,Int},
+    Aω2_prev::SparseMatrixCSC{T,Int},
+    M1::Vector{T},
+    M2::Vector{T},
+    lay,
+    u::Vector{T},
+    θ::T,
+) where {T}
+    copyto!(b, bsteady)
+    if θ != one(T)
+        corr1 = Aω1_prev * u
+        corr2 = Aω2_prev * u
+        _insert_vec!(b, lay.ω1, (-(one(T) - θ)) .* corr1)
+        _insert_vec!(b, lay.ω2, (-(one(T) - θ)) .* corr2)
+    end
+    _insert_vec!(b, lay.ω1, M1 .* Vector{T}(u[lay.ω1]))
+    _insert_vec!(b, lay.ω2, M2 .* Vector{T}(u[lay.ω2]))
+    return b
+end
+
+function solve_unsteady!(
+    model::DiffusionModelMono{N,T},
+    u0,
+    tspan::Tuple{T,T};
+    dt::T,
+    scheme=:BE,
+    method::Symbol=:direct,
+    save_history::Bool=true,
+    kwargs...,
+) where {N,T}
+    t0, tend = tspan
+    tend >= t0 || throw(ArgumentError("tspan must satisfy tend >= t0"))
+    dt > zero(T) || throw(ArgumentError("dt must be positive"))
+    θ = _theta_from_scheme(T, scheme)
+
+    u = _init_unsteady_state_mono(model, u0)
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω), last(lay.γ)))
+
+    matrix_dep = _mono_matrix_time_dependent(model)
+    rhs_dep = _mono_rhs_time_dependent(model)
+    constant_operator = !matrix_dep && !rhs_dep
+
+    times = T[t0]
+    states = Vector{Vector{T}}()
+    save_history && push!(states, copy(u))
+
+    tol = sqrt(eps(T)) * max(one(T), abs(t0), abs(tend))
+    t = t0
+
+    if constant_operator
+        Aconst, bsteady, Aω_prev, M = _prepare_constant_unsteady_mono(model, t0, dt, θ)
+        sys = LinearSystem(Aconst, copy(bsteady); x=copy(u))
+        while t < tend - tol
+            dt_step = min(dt, tend - t)
+            if abs(dt_step - dt) <= tol
+                _set_constant_rhs_mono!(sys.b, bsteady, Aω_prev, M, lay, u, θ)
+                solve!(sys; method=method, reuse_factorization=true, kwargs...)
+            else
+                assemble_unsteady_mono!(sys, model, u, t, dt_step, θ)
+                solve!(sys; method=method, reuse_factorization=false, kwargs...)
+            end
+            u .= sys.x
+            t += dt_step
+            push!(times, t)
+            save_history && push!(states, copy(u))
+        end
+        if !save_history
+            states = [copy(u)]
+            times = T[t]
+        end
+        return (times=times, states=states, system=sys, reused_constant_operator=true)
+    end
+
+    sys = LinearSystem(spzeros(T, nsys, nsys), zeros(T, nsys); x=copy(u))
+    while t < tend - tol
+        dt_step = min(dt, tend - t)
+        assemble_unsteady_mono!(sys, model, u, t, dt_step, θ)
+        solve!(sys; method=method, reuse_factorization=false, kwargs...)
+        u .= sys.x
+        t += dt_step
+        push!(times, t)
+        save_history && push!(states, copy(u))
+    end
+    if !save_history
+        states = [copy(u)]
+        times = T[t]
+    end
+    return (times=times, states=states, system=sys, reused_constant_operator=false)
+end
+
+function solve_unsteady!(
+    model::DiffusionModelDiph{N,T},
+    u0,
+    tspan::Tuple{T,T};
+    dt::T,
+    scheme=:BE,
+    method::Symbol=:direct,
+    save_history::Bool=true,
+    kwargs...,
+) where {N,T}
+    t0, tend = tspan
+    tend >= t0 || throw(ArgumentError("tspan must satisfy tend >= t0"))
+    dt > zero(T) || throw(ArgumentError("dt must be positive"))
+    θ = _theta_from_scheme(T, scheme)
+
+    u = _init_unsteady_state_diph(model, u0)
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+
+    matrix_dep = _diph_matrix_time_dependent(model)
+    rhs_dep = _diph_rhs_time_dependent(model)
+    constant_operator = !matrix_dep && !rhs_dep
+
+    times = T[t0]
+    states = Vector{Vector{T}}()
+    save_history && push!(states, copy(u))
+
+    tol = sqrt(eps(T)) * max(one(T), abs(t0), abs(tend))
+    t = t0
+
+    if constant_operator
+        Aconst, bsteady, Aω1_prev, Aω2_prev, M1, M2 = _prepare_constant_unsteady_diph(model, t0, dt, θ)
+        sys = LinearSystem(Aconst, copy(bsteady); x=copy(u))
+        while t < tend - tol
+            dt_step = min(dt, tend - t)
+            if abs(dt_step - dt) <= tol
+                _set_constant_rhs_diph!(sys.b, bsteady, Aω1_prev, Aω2_prev, M1, M2, lay, u, θ)
+                solve!(sys; method=method, reuse_factorization=true, kwargs...)
+            else
+                assemble_unsteady_diph!(sys, model, u, t, dt_step, θ)
+                solve!(sys; method=method, reuse_factorization=false, kwargs...)
+            end
+            u .= sys.x
+            t += dt_step
+            push!(times, t)
+            save_history && push!(states, copy(u))
+        end
+        if !save_history
+            states = [copy(u)]
+            times = T[t]
+        end
+        return (times=times, states=states, system=sys, reused_constant_operator=true)
+    end
+
+    sys = LinearSystem(spzeros(T, nsys, nsys), zeros(T, nsys); x=copy(u))
+    while t < tend - tol
+        dt_step = min(dt, tend - t)
+        assemble_unsteady_diph!(sys, model, u, t, dt_step, θ)
+        solve!(sys; method=method, reuse_factorization=false, kwargs...)
+        u .= sys.x
+        t += dt_step
+        push!(times, t)
+        save_history && push!(states, copy(u))
+    end
+    if !save_history
+        states = [copy(u)]
+        times = T[t]
+    end
+    return (times=times, states=states, system=sys, reused_constant_operator=false)
 end
 
 end

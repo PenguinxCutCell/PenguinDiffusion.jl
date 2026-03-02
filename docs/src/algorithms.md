@@ -30,6 +30,9 @@ This page summarizes high-level algorithms implemented by the core routines.
 4) Solving
 
 - `solve_steady!` helper constructs a `LinearSystem`, calls the appropriate assemble routine, then invokes `solve!` from `PenguinSolverCore` with the selected method (direct or iterative).
+- `solve_unsteady!` advances in time with `:BE` / `:CN` (or numeric `θ`) and supports a constant-operator fast path:
+  - if matrix and RHS coefficients are time-invariant, it assembles once and reuses the factorization across timesteps,
+  - if not, it falls back to per-step unsteady assembly.
 
 Performance / numerical notes
 

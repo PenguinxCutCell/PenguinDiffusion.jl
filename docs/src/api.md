@@ -20,6 +20,8 @@ Key functions
 - `assemble_unsteady_diph!(sys::LinearSystem, model::DiffusionModelDiph, uⁿ, t::T, dt::T, scheme)`
 - `solve_steady!(model::DiffusionModelMono; t::T=zero(T), method::Symbol=:direct, kwargs...)`
 - `solve_steady!(model::DiffusionModelDiph; t::T=zero(T), method::Symbol=:direct, kwargs...)`
+- `solve_unsteady!(model::DiffusionModelMono, u0, tspan; dt, scheme=:BE|:CN|θ, method=:direct, save_history=true, kwargs...)`
+- `solve_unsteady!(model::DiffusionModelDiph, u0, tspan; dt, scheme=:BE|:CN|θ, method=:direct, save_history=true, kwargs...)`
 
 Callbacks and arguments
 
@@ -29,6 +31,7 @@ Callbacks and arguments
 Layout and offsets
 
 - Use `layout_mono(ntotal)` and `layout_diph(ntotal)` to get `UnknownLayout` giving offsets for ω and γ variables; `model.layout.offsets` contains ranges used when assembling global matrices.
+- `solve_unsteady!` accepts either reduced initial vectors (`ω` for mono, `ω1+ω2` for diph) or full system vectors.
 
 Boundary conditions
 

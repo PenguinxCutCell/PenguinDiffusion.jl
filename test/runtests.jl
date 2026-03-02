@@ -451,15 +451,120 @@ end
     @test all(diff(energies) .<= 1e-10)
 end
 
+@testset "Diphasic complementary capacities (φ and -φ)" begin
+    grid = (range(0.0, 1.0; length=41),)
+    xγ = 0.53
+    moms1 = geometric_moments((x) -> x - xγ, grid, Float64, nan; method=:vofijul)
+    moms2 = geometric_moments((x) -> -(x - xγ), grid, Float64, nan; method=:vofijul)
+    cap1 = assembled_capacity(moms1; bc=0.0)
+    cap2 = assembled_capacity(moms2; bc=0.0)
+    capfull = assembled_capacity(full_moments(grid); bc=0.0)
+
+    idx = physical_indices(cap1.nnodes)
+    for i in idx
+        @test isapprox(cap1.buf.V[i] + cap2.buf.V[i], capfull.buf.V[i]; atol=5e-12)
+        γ1 = cap1.buf.Γ[i]
+        γ2 = cap2.buf.Γ[i]
+        if isfinite(γ1) && γ1 > 0.0
+            @test isapprox(γ1, γ2; atol=5e-12)
+        end
+    end
+end
+
+@testset "Diphasic jump coupling structure" begin
+    grid = (range(0.0, 1.0; length=81),)
+    xγ = 0.37
+    source(x, t) = 0.0
+    bc = BorderConditions(; left=Dirichlet(1.0), right=Dirichlet(0.0))
+
+    moms1 = geometric_moments((x) -> x - xγ, grid, Float64, nan; method=:vofijul)
+    moms2 = geometric_moments((x) -> -(x - xγ), grid, Float64, nan; method=:vofijul)
+    cap1 = assembled_capacity(moms1; bc=0.0)
+    cap2 = assembled_capacity(moms2; bc=0.0)
+    ops1 = DiffusionOps(cap1; periodic=periodic_flags(bc, 1))
+    ops2 = DiffusionOps(cap2; periodic=periodic_flags(bc, 1))
+    ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
+
+    model_diph = DiffusionModelDiph(cap1, ops1, 1.0, source, cap2, ops2, 1.0, source; bc_border=bc, ic=ic)
+    nsys = maximum((last(model_diph.layout.offsets.ω1), last(model_diph.layout.offsets.γ1), last(model_diph.layout.offsets.ω2), last(model_diph.layout.offsets.γ2)))
+    sys = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_steady_diph!(sys, model_diph, 0.0)
+
+    layd = model_diph.layout.offsets
+    @test norm(sys.A[layd.γ1, layd.γ2]) > 1e-8
+    @test norm(sys.A[layd.γ2, layd.ω1]) > 1e-8
+    @test norm(sys.A[layd.γ2, layd.ω2]) > 1e-8
+
+    solve!(sys; method=:direct)
+    @test all(isfinite, sys.x)
+    @test maximum(abs.(sys.x[layd.γ1] .- sys.x[layd.γ2])) < 2e-2
+end
+
+@testset "Public solve_unsteady! API (mono+diph)" begin
+    # Mono: manufactured heat mode with homogeneous Dirichlet.
+    u_exact_mono(x, t) = exp(-pi^2 * t) * sin(pi * x)
+    bc1d = BorderConditions(; left=Dirichlet(0.0), right=Dirichlet(0.0))
+    grid1d = (range(0.0, 1.0; length=65),)
+    cap1d = assembled_capacity(full_moments(grid1d); bc=0.0)
+    ops1d = DiffusionOps(cap1d; periodic=periodic_flags(bc1d, 1))
+    model1d = DiffusionModelMono(cap1d, ops1d, 1.0; source=0.0, bc_border=bc1d)
+
+    idx1d = physical_indices(cap1d.nnodes)
+    u0ω = zeros(Float64, cap1d.ntotal)
+    for i in idx1d
+        u0ω[i] = u_exact_mono(cap1d.C_ω[i][1], 0.0)
+    end
+    sol_mono = solve_unsteady!(model1d, u0ω, (0.0, 0.1); dt=0.02, scheme=:BE, save_history=false)
+    uω = sol_mono.system.x[model1d.layout.offsets.ω]
+    err_mono = sqrt(sum((uω[i] - u_exact_mono(cap1d.C_ω[i][1], 0.1))^2 for i in idx1d) / length(idx1d))
+    @test err_mono < 3e-2
+    @test sol_mono.reused_constant_operator
+    @test length(sol_mono.times) == 1
+    @test isapprox(sol_mono.times[end], 0.1; atol=1e-12)
+
+    # Diph: full-domain manufactured modes (no cut interface; interface terms inactive).
+    u1_exact(x, y, t) = exp(-2pi^2 * t) * sin(pi * x) * sin(pi * y)
+    u2_exact(x, y, t) = exp(-8pi^2 * t) * sin(2pi * x) * sin(2pi * y)
+    grid2d = (range(0.0, 1.0; length=33), range(0.0, 1.0; length=33))
+    cap2d_1 = assembled_capacity(full_moments(grid2d); bc=0.0)
+    cap2d_2 = assembled_capacity(full_moments(grid2d); bc=0.0)
+    bc2d = BorderConditions(; left=Dirichlet(0.0), right=Dirichlet(0.0), bottom=Dirichlet(0.0), top=Dirichlet(0.0))
+    ops2d_1 = DiffusionOps(cap2d_1; periodic=periodic_flags(bc2d, 2))
+    ops2d_2 = DiffusionOps(cap2d_2; periodic=periodic_flags(bc2d, 2))
+    ic2d = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
+    model2d = DiffusionModelDiph(cap2d_1, ops2d_1, 1.0, 0.0, cap2d_2, ops2d_2, 1.0, 0.0; bc_border=bc2d, ic=ic2d)
+
+    idx2d = physical_indices(cap2d_1.nnodes)
+    u0ω1 = zeros(Float64, cap2d_1.ntotal)
+    u0ω2 = zeros(Float64, cap2d_2.ntotal)
+    for i in idx2d
+        x, y = cap2d_1.C_ω[i]
+        u0ω1[i] = u1_exact(x, y, 0.0)
+        u0ω2[i] = u2_exact(x, y, 0.0)
+    end
+    sol_diph = solve_unsteady!(model2d, vcat(u0ω1, u0ω2), (0.0, 0.05); dt=0.25 * step(grid2d[1])^2, scheme=:CN, save_history=false)
+    lay = model2d.layout.offsets
+    u1 = sol_diph.system.x[lay.ω1]
+    u2 = sol_diph.system.x[lay.ω2]
+    err1 = sqrt(sum((u1[i] - u1_exact(cap2d_1.C_ω[i]..., 0.05))^2 for i in idx2d) / length(idx2d))
+    err2 = sqrt(sum((u2[i] - u2_exact(cap2d_2.C_ω[i]..., 0.05))^2 for i in idx2d) / length(idx2d))
+    @test err1 < 5e-3
+    @test err2 < 2e-2
+    @test sol_diph.reused_constant_operator
+end
+
 @testset "Unsteady diphasic cut-cell solve robustness" begin
     xγ = 0.53
     grid = (range(0.0, 1.0; length=41),)
-    moms = geometric_moments((x) -> x - xγ, grid, Float64, nan; method=:vofijul)
-    cap = assembled_capacity(moms; bc=0.0)
+    moms1 = geometric_moments((x) -> x - xγ, grid, Float64, nan; method=:vofijul)
+    moms2 = geometric_moments((x) -> -(x - xγ), grid, Float64, nan; method=:vofijul)
+    cap1 = assembled_capacity(moms1; bc=0.0)
+    cap2 = assembled_capacity(moms2; bc=0.0)
     bc = BorderConditions(; left=Dirichlet(0.0), right=Dirichlet(0.0))
-    ops = DiffusionOps(cap; periodic=periodic_flags(bc, 1))
+    ops1 = DiffusionOps(cap1; periodic=periodic_flags(bc, 1))
+    ops2 = DiffusionOps(cap2; periodic=periodic_flags(bc, 1))
     ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
-    model = DiffusionModelDiph(cap, ops, 1.0, 1.0; source=(x, t) -> (0.0, 0.0), bc_border=bc, bc_interface=ic)
+    model = DiffusionModelDiph(cap1, ops1, 1.0, 0.0, cap2, ops2, 1.0, 0.0; bc_border=bc, ic=ic)
 
     lay = model.layout.offsets
     nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))

@@ -15,7 +15,7 @@ makedocs(
         "API" => "api.md",
         "Examples" => "examples.md",
         "Algorithms" => "algorithms.md",
-        "Diffusion Models" => "diffusion_models.md",
+        "Diffusion Models" => "diffusion.md",
     ],
     pagesonly = true,
     warnonly = false,
