@@ -1,0 +1,43 @@
+**Examples**
+
+The repository includes standalone example scripts under `examples/` with analytical references and volume-weighted error checks.
+
+Run from repository root:
+
+```bash
+julia --project=. examples/2D/Diffusion/Poisson_robin.jl
+```
+
+Available diffusion examples
+
+- `examples/2D/Diffusion/Poisson_robin.jl`
+  - 2D steady Poisson inside a disk.
+  - Embedded interface condition: `Robin(alpha, beta, g)`.
+  - Analytical reference: radial quadratic profile.
+  - Check: volume-weighted `L2` error over active physical cells.
+
+- `examples/2D/Diffusion/Heat_robin.jl`
+  - 2D unsteady heat diffusion inside a disk.
+  - Embedded interface condition: Robin exchange to ambient temperature.
+  - Analytical reference: radial Bessel-series solution at final time.
+  - Check: volume-weighted `L2` error at final time.
+
+- `examples/1D/Diffusion/Poisson_nobody_neumann_mms.jl`
+  - 1D manufactured steady Poisson with no embedded body (`body = -1`).
+  - Outer boundary conditions: homogeneous Neumann on both sides.
+  - Analytical reference: `u(x)=cos(pi*x)`.
+  - Check: volume-weighted `L2` error, with one dof pinned as gauge for the Neumann nullspace.
+
+- `examples/3D/Diffusion/Poisson_outside_sphere_embedded_dirichlet.jl`
+  - 3D manufactured steady Poisson outside a sphere (cut-cell geometry).
+  - Embedded interface condition: Dirichlet implemented as `Robin(1, 0, g)`.
+  - Outer box boundary conditions: Dirichlet from the same analytical solution.
+  - Check: volume-weighted `L2` error and active-volume consistency.
+
+Regression tests
+
+For the full package validation suite:
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.test()'
+```

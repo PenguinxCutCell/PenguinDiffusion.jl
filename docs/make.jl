@@ -12,6 +12,10 @@ makedocs(
     ),
     pages = [
         "Home" => "index.md",
+        "API" => "api.md",
+        "Examples" => "examples.md",
+        "Algorithms" => "algorithms.md",
+        "Diffusion Models" => "diffusion_models.md",
     ],
     pagesonly = true,
     warnonly = false,
