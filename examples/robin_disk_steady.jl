@@ -40,7 +40,7 @@ function main()
     g_robin = a * (1.0 + R^2) + b * kappa * (2.0 * R)
 
     # Grid / moments.
-    n = 
+    n = 32
     x = collect(range(0.0, 1.0; length=n))
     y = collect(range(0.0, 1.0; length=n))
 
