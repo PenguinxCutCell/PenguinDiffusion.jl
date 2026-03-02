@@ -25,6 +25,7 @@ include("io_2phase.jl")
 include("updaters.jl")
 include("updaters_2phase.jl")
 include("steady.jl")
+include("moving_mono.jl")
 
 export DiffusionProblem
 export DiffusionSystem
@@ -42,5 +43,7 @@ export Source1Updater, Source2Updater
 export steady_linear_problem, steady_solve
 export unsteady_block_matrix, unsteady_block_solve
 export diphasic_unsteady_block_matrix, diphasic_unsteady_block_solve
+export MovingDiffusionMonoSystem, build_moving_system
+export moving_unsteady_block_matrix, moving_unsteady_block_solve
 
 end
