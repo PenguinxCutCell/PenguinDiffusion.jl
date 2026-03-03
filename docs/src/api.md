@@ -25,7 +25,8 @@ Key functions
 
 Callbacks and arguments
 
-- Diffusivity (`D`, `D1`, `D2`) can be constants or callables evaluated as `eval_coeff(D, x, t, i)` by the sampling helper.
+- Diffusivity (`D`, `D1`, `D2`) can be constants or callables evaluated as `eval_coeff(D, x, t, i)`.
+- Variable-coefficient diffusion is assembled with face coefficients (`coeff_mode`): `:harmonic` (default), `:arithmetic`, or direct `:face` sampling.
 - `source` may be a numeric constant, a function of `(x... )`, or `(x..., t)`; for diph it may be a function returning a tuple `(s1,s2)` or a tuple of two callbacks/constants.
 
 Layout and offsets

@@ -296,7 +296,8 @@ end
 @testset "Space/time variable coefficient manufactured 1D" begin
     u_exact(x) = sin(pi * x)
     D(x, t) = 1.0 + t + 0.25 * cos(2pi * x)
-    f(x, t) = D(x, t) * pi^2 * sin(pi * x)
+    dDdx(x, t) = -0.5 * pi * sin(2pi * x)
+    f(x, t) = -(dDdx(x, t) * (pi * cos(pi * x)) + D(x, t) * (-pi^2 * sin(pi * x)))
     bc = BorderConditions(; left=Dirichlet(0.0), right=Dirichlet(0.0))
 
     errs = Float64[]

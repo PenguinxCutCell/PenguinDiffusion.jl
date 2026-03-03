@@ -21,6 +21,7 @@ struct DiffusionModelMono{N,T,DT,ST,IT}
     bc_border::BorderConditions
     bc_interface::IT
     layout::UnknownLayout
+    coeff_mode::Symbol
 end
 
 function DiffusionModelMono(
@@ -31,9 +32,11 @@ function DiffusionModelMono(
     bc_border::BorderConditions=BorderConditions(),
     bc_interface::Union{Nothing,PenguinBCs.Robin}=nothing,
     layout::UnknownLayout=layout_mono(cap.ntotal),
+    coeff_mode::Symbol=:harmonic,
 ) where {N,T}
+    coeff_mode_eff = _normalize_coeff_mode(coeff_mode)
     return DiffusionModelMono{N,T,typeof(D),typeof(source),typeof(bc_interface)}(
-        ops, cap, D, source, bc_border, bc_interface, layout
+        ops, cap, D, source, bc_border, bc_interface, layout, coeff_mode_eff
     )
 end
 
@@ -49,6 +52,7 @@ struct DiffusionModelDiph{N,T,D1T,D2T,S1T,S2T,IT}
     bc_border::BorderConditions
     ic::IT
     layout::UnknownLayout
+    coeff_mode::Symbol
 end
 
 function DiffusionModelDiph(
@@ -64,6 +68,7 @@ function DiffusionModelDiph(
     ic::Union{Nothing,InterfaceConditions}=nothing,
     bc_interface::Union{Nothing,InterfaceConditions}=nothing,
     layout::UnknownLayout=layout_diph(cap1.ntotal),
+    coeff_mode::Symbol=:harmonic,
 ) where {N,T}
     cap1.ntotal == cap2.ntotal || throw(ArgumentError("cap1 and cap2 must have identical ntotal"))
     cap1.nnodes == cap2.nnodes || throw(ArgumentError("cap1 and cap2 must have identical nnodes"))
@@ -71,8 +76,9 @@ function DiffusionModelDiph(
         throw(ArgumentError("provide at most one interface condition via `ic` or `bc_interface`"))
     end
     ic_eff = ic === nothing ? bc_interface : ic
+    coeff_mode_eff = _normalize_coeff_mode(coeff_mode)
     return DiffusionModelDiph{N,T,typeof(D1),typeof(D2),typeof(source1),typeof(source2),typeof(ic_eff)}(
-        ops1, cap1, D1, source1, ops2, cap2, D2, source2, bc_border, ic_eff, layout
+        ops1, cap1, D1, source1, ops2, cap2, D2, source2, bc_border, ic_eff, layout, coeff_mode_eff
     )
 end
 
@@ -86,6 +92,7 @@ function DiffusionModelDiph(
     ic::Union{Nothing,InterfaceConditions}=nothing,
     bc_interface::Union{Nothing,InterfaceConditions}=nothing,
     layout::UnknownLayout=layout_diph(cap.ntotal),
+    coeff_mode::Symbol=:harmonic,
 ) where {N,T}
     source1, source2 = if source isa Tuple && length(source) == 2
         (source[1], source[2])
@@ -116,6 +123,7 @@ function DiffusionModelDiph(
         ic=ic,
         bc_interface=bc_interface,
         layout=layout,
+        coeff_mode=coeff_mode,
     )
 end
 
@@ -156,6 +164,77 @@ function _sample_coeff(cap::AssembledCapacity{N,T}, D, t::T) where {N,T}
         out[i] = convert(T, eval_coeff(D, cap.C_ω[i], t, i))
     end
     return out
+end
+
+function _normalize_coeff_mode(mode::Symbol)::Symbol
+    if mode === :harmonic || mode === :arithmetic || mode === :face || mode === :cell
+        return mode
+    end
+    throw(ArgumentError("unknown coeff_mode `$mode`; expected :harmonic, :arithmetic, :face, or :cell"))
+end
+
+function _harmonic_mean(a::T, b::T) where {T}
+    den = a + b
+    return iszero(den) ? zero(T) : (T(2) * a * b) / den
+end
+
+function _face_coeff_values(
+    cap::AssembledCapacity{N,T},
+    D,
+    t::T,
+    mode::Symbol,
+) where {N,T}
+    mode_eff = _normalize_coeff_mode(mode)
+    nt = cap.ntotal
+    vals = Vector{T}(undef, N * nt)
+    LI = LinearIndices(cap.nnodes)
+    cω = cap.C_ω
+
+    if mode_eff === :face
+        @inbounds for d in 1:N
+            offset = (d - 1) * nt
+            xlow = convert(T, cap.xyz[d][1])
+            for I in CartesianIndices(cap.nnodes)
+                lin = LI[I]
+                if any(k -> I[k] == cap.nnodes[k], 1:N)
+                    vals[offset + lin] = zero(T)
+                    continue
+                end
+                xface = if I[d] == 1
+                    SVector{N,T}(ntuple(k -> (k == d ? xlow : cω[lin][k]), N))
+                else
+                    Iminus = CartesianIndex(ntuple(k -> (k == d ? I[k] - 1 : I[k]), N))
+                    linm = LI[Iminus]
+                    SVector{N,T}(ntuple(k -> (cω[lin][k] + cω[linm][k]) / T(2), N))
+                end
+                vals[offset + lin] = convert(T, eval_coeff(D, xface, t, lin))
+            end
+        end
+        return vals
+    end
+
+    kcell = _sample_coeff(cap, D, t)
+    @inbounds for d in 1:N
+        offset = (d - 1) * nt
+        for I in CartesianIndices(cap.nnodes)
+            lin = LI[I]
+            if any(k -> I[k] == cap.nnodes[k], 1:N)
+                vals[offset + lin] = zero(T)
+                continue
+            end
+            ki = kcell[lin]
+            if mode_eff === :cell
+                vals[offset + lin] = ki
+            elseif I[d] == 1
+                vals[offset + lin] = ki
+            else
+                Iminus = CartesianIndex(ntuple(k -> (k == d ? I[k] - 1 : I[k]), N))
+                kim = kcell[LI[Iminus]]
+                vals[offset + lin] = mode_eff === :harmonic ? _harmonic_mean(ki, kim) : (ki + kim) / T(2)
+            end
+        end
+    end
+    return vals
 end
 
 function _interface_mask(cap::AssembledCapacity{N,T}) where {N,T}
@@ -374,14 +453,21 @@ function _scale_rows!(A::SparseMatrixCSC{T,Int}, rows::UnitRange{Int}, α::T) wh
     return A
 end
 
-function _core_ops(ops::DiffusionOps)
+function _weighted_core_ops(
+    cap::AssembledCapacity{N,T},
+    ops::DiffusionOps{N,T},
+    D,
+    t::T,
+    mode::Symbol,
+) where {N,T}
     G = ops.G
     H = ops.H
-    Winv = ops.Winv
-    K = G' * Winv * G
-    C = G' * Winv * H
-    J = H' * Winv * G
-    L = H' * Winv * H
+    κface = _face_coeff_values(cap, D, t, mode)
+    Wκ = spdiagm(0 => (ops.Winv.nzval .* κface))
+    K = G' * Wκ * G
+    C = G' * Wκ * H
+    J = H' * Wκ * G
+    L = H' * Wκ * H
     return K, C, J, L
 end
 
@@ -401,18 +487,16 @@ function assemble_steady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono{N
     lay = model.layout.offsets
     nsys = maximum((last(lay.ω), last(lay.γ)))
 
-    K, C, J, L = _core_ops(model.ops)
-    Dω = _sample_coeff(model.cap, model.D, t)
+    K, C, J, L = _weighted_core_ops(model.cap, model.ops, model.D, t, model.coeff_mode)
     fω = _source_values_mono(model.cap, model.source, t)
     α, β, gγ = _interface_diagonals_mono(model.cap, model.bc_interface, t)
 
-    ID = spdiagm(0 => Dω)
     Iβ = spdiagm(0 => β)
     Iα = spdiagm(0 => α)
     Iγ = model.cap.Γ
 
-    A11 = ID * K
-    A12 = ID * C
+    A11 = K
+    A12 = C
     A21 = Iβ * J
     A22 = Iβ * L + Iα * Iγ
     if model.bc_interface === nothing
@@ -491,16 +575,11 @@ function assemble_steady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N
     lay = model.layout.offsets
     nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
 
-    K1, C1, J1, L1 = _core_ops(model.ops1)
-    K2, C2, J2, L2 = _core_ops(model.ops2)
-
-    D1 = _sample_coeff(model.cap1, model.D1, t)
-    D2 = _sample_coeff(model.cap2, model.D2, t)
+    K1, C1, J1, L1 = _weighted_core_ops(model.cap1, model.ops1, model.D1, t, model.coeff_mode)
+    K2, C2, J2, L2 = _weighted_core_ops(model.cap2, model.ops2, model.D2, t, model.coeff_mode)
     f1, f2 = _source_values_diph(model.cap1, model.source1, model.cap2, model.source2, t)
     αs1, αs2, βs1, βs2, gs, αf1, αf2, βf1, βf2, gf = _interface_coupling_diph(model.cap1, model.cap2, model.ic, t)
 
-    ID1 = spdiagm(0 => D1)
-    ID2 = spdiagm(0 => D2)
     Iαs1 = spdiagm(0 => αs1)
     Iαs2 = spdiagm(0 => αs2)
     Iβs1 = spdiagm(0 => βs1)
@@ -515,10 +594,10 @@ function assemble_steady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N
     A = spzeros(T, nsys, nsys)
     b = zeros(T, nsys)
 
-    Aωω1 = ID1 * K1
-    Aωγ1 = ID1 * C1
-    Aωω2 = ID2 * K2
-    Aωγ2 = ID2 * C2
+    Aωω1 = K1
+    Aωγ1 = C1
+    Aωω2 = K2
+    Aωγ2 = C2
     _insert_block!(A, lay.ω1, lay.ω1, Aωω1)
     _insert_block!(A, lay.ω1, lay.γ1, Aωγ1)
     _insert_block!(A, lay.ω2, lay.ω2, Aωω2)

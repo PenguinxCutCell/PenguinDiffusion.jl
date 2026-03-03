@@ -22,8 +22,8 @@
 | Time scheme | Backward Euler (`θ=1`) | Implemented | Covered by regression/order tests |
 | Time scheme | Crank–Nicolson (`θ=1/2`) | Implemented | Theta assembly path validated with dedicated temporal-order test |
 | Coefficients | Constant diffusion coefficient | Implemented | Scalar coefficient support |
-| Coefficients | Space-variable coefficient | Implemented | Function coefficient support |
-| Coefficients | Time-variable coefficient | Implemented | `(x..., t)` coefficient support |
+| Coefficients | Space-variable coefficient | Implemented | Face-based assembly (`:harmonic` default, `:arithmetic`, `:face`) |
+| Coefficients | Time-variable coefficient | Implemented | `(x..., t)` coefficient support with face-based assembly |
 | Embedded interface | Mono interface coupling | Implemented | Monophasic embedded interface uses `Robin(α, β, g)` |
 | Embedded interface | Diph interface coupling | Implemented | 4-block diphasic interface assembly |
 | Embedded interface | No-interface reduction behavior | Implemented | Regression-tested (`body = -1`) |
