@@ -23,6 +23,13 @@ Available diffusion examples
   - Check: volume-weighted `L2` error at final time.
   - Uses `solve_unsteady!(...; scheme=:BE)`.
 
+- `examples/2D/Diffusion/MovingHeat_robin.jl`
+  - 2D unsteady heat diffusion on a moving domain (oscillating disk).
+  - Embedded interface condition: `Robin(1, 0, g)` (Dirichlet-equivalent on Γ).
+  - Analytical reference: manufactured smooth transient solution `u(x,y,t)=exp(λt)sin(πx)sin(πy)`.
+  - Check: volume-weighted `L2` error at final time.
+  - Uses `solve_unsteady_moving!(...; scheme=:BE)`.
+
 - `examples/1D/Diffusion/Poisson_nobody_neumann_mms.jl`
   - 1D manufactured steady Poisson with no embedded body (`body = -1`).
   - Outer boundary conditions: homogeneous Neumann on both sides.
@@ -47,6 +54,13 @@ Available diffusion examples
     - `u2=exp(-8*pi^2*t)*sin(2*pi*x)sin(2*pi*y)`
   - Check: phase-wise volume-weighted `L2` errors at final time.
   - Uses `solve_unsteady!(...; scheme=:CN)` and reports operator reuse.
+
+- `examples/2D/Diffusion/MovingHeat_2ph.jl`
+  - 2D diphasic unsteady heat on a moving domain (oscillating interface).
+  - Interface conditions: zero scalar jump and zero flux jump.
+  - Analytical reference: shared manufactured field `u1=u2=exp(-2*pi^2*t)sin(pi*x)sin(pi*y)`.
+  - Check: phase-wise volume-weighted `L2` errors at final time.
+  - Uses `solve_unsteady_moving!(...; scheme=:BE)`.
 
 Regression tests
 

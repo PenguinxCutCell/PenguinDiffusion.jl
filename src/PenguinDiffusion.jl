@@ -4,14 +4,18 @@ using LinearAlgebra
 using SparseArrays
 using StaticArrays
 
+using CartesianGeometry: GeometricMoments, geometric_moments, nan
+using CartesianGrids: CartesianGrid, SpaceTimeCartesianGrid, grid1d
 using CartesianOperators
 using PenguinBCs
 using PenguinSolverCore
 
 export DiffusionModelMono, DiffusionModelDiph
+export MovingDiffusionModelMono, MovingDiffusionModelDiph
 export assemble_steady_mono!, assemble_unsteady_mono!
 export assemble_steady_diph!, assemble_unsteady_diph!
-export solve_steady!, solve_unsteady!
+export assemble_unsteady_mono_moving!, assemble_unsteady_diph_moving!
+export solve_steady!, solve_unsteady!, solve_unsteady_moving!
 
 struct DiffusionModelMono{N,T,DT,ST,IT}
     ops::DiffusionOps{N,T}
@@ -37,6 +41,140 @@ function DiffusionModelMono(
     coeff_mode_eff = _normalize_coeff_mode(coeff_mode)
     return DiffusionModelMono{N,T,typeof(D),typeof(source),typeof(bc_interface)}(
         ops, cap, D, source, bc_border, bc_interface, layout, coeff_mode_eff
+    )
+end
+
+mutable struct MovingDiffusionModelMono{N,T,DT,ST,IT,BT}
+    grid::CartesianGrid{N,T}
+    body::BT
+    D::DT
+    source::ST
+    bc_border::BorderConditions
+    bc_interface::IT
+    layout::UnknownLayout
+    coeff_mode::Symbol
+    geom_method::Symbol
+    cap_slab::Union{Nothing,AssembledCapacity{N,T}}
+    ops_slab::Union{Nothing,DiffusionOps{N,T}}
+    Vn::Vector{T}
+    Vn1::Vector{T}
+end
+
+mutable struct MovingDiffusionModelDiph{N,T,D1T,D2T,S1T,S2T,IT,B1T,B2T}
+    grid::CartesianGrid{N,T}
+    body1::B1T
+    body2::B2T
+    D1::D1T
+    source1::S1T
+    D2::D2T
+    source2::S2T
+    bc_border::BorderConditions
+    ic::IT
+    layout::UnknownLayout
+    coeff_mode::Symbol
+    geom_method::Symbol
+    cap1_slab::Union{Nothing,AssembledCapacity{N,T}}
+    ops1_slab::Union{Nothing,DiffusionOps{N,T}}
+    cap2_slab::Union{Nothing,AssembledCapacity{N,T}}
+    ops2_slab::Union{Nothing,DiffusionOps{N,T}}
+    V1n::Vector{T}
+    V1n1::Vector{T}
+    V2n::Vector{T}
+    V2n1::Vector{T}
+end
+
+function MovingDiffusionModelMono(
+    grid::CartesianGrid{N,T},
+    body,
+    D;
+    source=((args...) -> zero(T)),
+    bc_border::BorderConditions=BorderConditions(),
+    bc_interface::Union{Nothing,PenguinBCs.Robin}=nothing,
+    layout::UnknownLayout=layout_mono(prod(grid.n)),
+    coeff_mode::Symbol=:harmonic,
+    geom_method::Symbol=:vofijul,
+) where {N,T}
+    coeff_mode_eff = _normalize_coeff_mode(coeff_mode)
+    nt = prod(grid.n)
+    return MovingDiffusionModelMono{
+        N,T,typeof(D),typeof(source),typeof(bc_interface),typeof(body)
+    }(
+        grid,
+        body,
+        D,
+        source,
+        bc_border,
+        bc_interface,
+        layout,
+        coeff_mode_eff,
+        geom_method,
+        nothing,
+        nothing,
+        zeros(T, nt),
+        zeros(T, nt),
+    )
+end
+
+function MovingDiffusionModelDiph(
+    grid::CartesianGrid{N,T},
+    body1,
+    D1,
+    D2;
+    source=((args...) -> (zero(T), zero(T))),
+    body2=nothing,
+    bc_border::BorderConditions=BorderConditions(),
+    ic::Union{Nothing,InterfaceConditions}=nothing,
+    bc_interface::Union{Nothing,InterfaceConditions}=nothing,
+    layout::UnknownLayout=layout_diph(prod(grid.n)),
+    coeff_mode::Symbol=:harmonic,
+    geom_method::Symbol=:vofijul,
+) where {N,T}
+    if !(ic === nothing) && !(bc_interface === nothing) && (ic !== bc_interface)
+        throw(ArgumentError("provide at most one interface condition via `ic` or `bc_interface`"))
+    end
+    ic_eff = ic === nothing ? bc_interface : ic
+    source1, source2 = if source isa Tuple && length(source) == 2
+        (source[1], source[2])
+    elseif source isa Function
+        (;
+            s1=(args...) -> begin
+                s = applicable(source, args...) ? source(args...) : source(args[1:(end - 1)]...)
+                s[1]
+            end,
+            s2=(args...) -> begin
+                s = applicable(source, args...) ? source(args...) : source(args[1:(end - 1)]...)
+                s[2]
+            end,
+        ) |> x -> (x.s1, x.s2)
+    else
+        throw(ArgumentError("diph source must be a function returning a tuple or a tuple of two callbacks/constants"))
+    end
+
+    coeff_mode_eff = _normalize_coeff_mode(coeff_mode)
+    nt = prod(grid.n)
+    return MovingDiffusionModelDiph{
+        N,T,typeof(D1),typeof(D2),typeof(source1),typeof(source2),typeof(ic_eff),typeof(body1),typeof(body2)
+    }(
+        grid,
+        body1,
+        body2,
+        D1,
+        source1,
+        D2,
+        source2,
+        bc_border,
+        ic_eff,
+        layout,
+        coeff_mode_eff,
+        geom_method,
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        zeros(T, nt),
+        zeros(T, nt),
+        zeros(T, nt),
+        zeros(T, nt),
     )
 end
 
@@ -235,6 +373,190 @@ function _face_coeff_values(
         end
     end
     return vals
+end
+
+psip_cn(Vn, Vn1) = (iszero(Vn) && iszero(Vn1)) ? 0.0 : 0.5
+psim_cn(Vn, Vn1) = (iszero(Vn) && iszero(Vn1)) ? 0.0 : 0.5
+psip_be(Vn, Vn1) = (iszero(Vn) && iszero(Vn1)) ? 0.0 : 1.0
+psim_be(Vn, Vn1) = 0.0
+
+function _psi_functions(scheme)
+    if scheme isa Symbol
+        if scheme === :CN
+            return psip_cn, psim_cn
+        elseif scheme === :BE
+            return psip_be, psim_be
+        end
+    elseif scheme isa Real
+        θ = Float64(scheme)
+        psip = (Vn, Vn1) -> (iszero(Vn) && iszero(Vn1) ? 0.0 : θ)
+        psim = (Vn, Vn1) -> (iszero(Vn) && iszero(Vn1) ? 0.0 : (1.0 - θ))
+        return psip, psim
+    end
+    throw(ArgumentError("moving scheme must be :BE, :CN, or numeric θ"))
+end
+
+function _eval_levelset_time(body, x::SVector{N,T}, t::T) where {N,T}
+    if applicable(body, x..., t)
+        return convert(T, body(x..., t))
+    elseif applicable(body, x...)
+        return convert(T, body(x...))
+    end
+    throw(ArgumentError("level-set callback must accept (x...) or (x..., t)"))
+end
+
+function _space_moments_at_time(
+    model::MovingDiffusionModelMono{N,T},
+    xyz_space::NTuple{N,AbstractVector{T}},
+    t::T,
+) where {N,T}
+    body_t = (x...) -> _eval_levelset_time(model.body, SVector{N,T}(x), t)
+    return geometric_moments(body_t, xyz_space, T, nan; method=model.geom_method)
+end
+
+function _phase_levelset_value(model::MovingDiffusionModelDiph{N,T}, phase::Int, x::SVector{N,T}, t::T) where {N,T}
+    if phase == 1
+        return _eval_levelset_time(model.body1, x, t)
+    elseif phase == 2
+        if model.body2 === nothing
+            return -_eval_levelset_time(model.body1, x, t)
+        end
+        return _eval_levelset_time(model.body2, x, t)
+    end
+    throw(ArgumentError("phase must be 1 or 2"))
+end
+
+function _space_moments_at_time(
+    model::MovingDiffusionModelDiph{N,T},
+    xyz_space::NTuple{N,AbstractVector{T}},
+    t::T,
+    phase::Int,
+) where {N,T}
+    body_t = (x...) -> _phase_levelset_value(model, phase, SVector{N,T}(x), t)
+    return geometric_moments(body_t, xyz_space, T, nan; method=model.geom_method)
+end
+
+function _slice_spacetime_to_space(
+    vec_st::AbstractVector,
+    nn_space::NTuple{N,Int},
+    nt::Int,
+    it::Int,
+) where {N}
+    dims_st = (nn_space..., nt)
+    li_st = LinearIndices(dims_st)
+    li_sp = LinearIndices(nn_space)
+    out = similar(vec_st, prod(nn_space))
+    @inbounds for I in CartesianIndices(nn_space)
+        out[li_sp[I]] = vec_st[li_st[Tuple(I)..., it]]
+    end
+    return out
+end
+
+function reduce_slab_to_space(
+    m_st::GeometricMoments{N1,T},
+    nn_space::NTuple{N,Int},
+) where {N1,N,T}
+    N1 == N + 1 || throw(ArgumentError("expected slab moments dimension $(N + 1), got $N1"))
+    nt = length(m_st.xyz[N1])
+    nt == 2 || throw(ArgumentError("space-time reduction expects 2 time nodes, got $nt"))
+
+    V = _slice_spacetime_to_space(m_st.V, nn_space, nt, 1)
+    Γ = _slice_spacetime_to_space(m_st.interface_measure, nn_space, nt, 1)
+    ctype = _slice_spacetime_to_space(m_st.cell_type, nn_space, nt, 1)
+    A = ntuple(d -> _slice_spacetime_to_space(m_st.A[d], nn_space, nt, 1), N)
+    B = ntuple(d -> _slice_spacetime_to_space(m_st.B[d], nn_space, nt, 1), N)
+    W = ntuple(d -> _slice_spacetime_to_space(m_st.W[d], nn_space, nt, 1), N)
+
+    bary_st = _slice_spacetime_to_space(m_st.barycenter, nn_space, nt, 1)
+    baryγ_st = _slice_spacetime_to_space(m_st.barycenter_interface, nn_space, nt, 1)
+    nγ_st = _slice_spacetime_to_space(m_st.interface_normal, nn_space, nt, 1)
+
+    bary = Vector{SVector{N,T}}(undef, length(V))
+    baryγ = Vector{SVector{N,T}}(undef, length(V))
+    nγ = Vector{SVector{N,T}}(undef, length(V))
+    @inbounds for i in eachindex(V)
+        bi = bary_st[i]
+        bγi = baryγ_st[i]
+        ni = nγ_st[i]
+        bary[i] = SVector{N,T}(ntuple(d -> bi[d], N))
+        baryγ[i] = SVector{N,T}(ntuple(d -> bγi[d], N))
+        nγ[i] = SVector{N,T}(ntuple(d -> ni[d], N))
+    end
+
+    xyz = ntuple(d -> collect(T, m_st.xyz[d]), N)
+    return GeometricMoments(V, bary, Γ, ctype, baryγ, nγ, A, B, W, xyz)
+end
+
+function _build_moving_slab!(
+    model::MovingDiffusionModelMono{N,T},
+    t::T,
+    dt::T,
+) where {N,T}
+    xyz_space = grid1d(model.grid)
+    moms_n = _space_moments_at_time(model, xyz_space, t)
+    moms_n1 = _space_moments_at_time(model, xyz_space, t + dt)
+
+    stgrid = SpaceTimeCartesianGrid(model.grid, T[t, t + dt])
+    xyz_st = grid1d(stgrid)
+    body_st = (x...) -> begin
+        xs = SVector{N,T}(ntuple(d -> convert(T, x[d]), N))
+        _eval_levelset_time(model.body, xs, convert(T, x[N + 1]))
+    end
+    moms_st = geometric_moments(body_st, xyz_st, T, nan; method=model.geom_method)
+    moms_slab = reduce_slab_to_space(moms_st, model.grid.n)
+    cap_slab = assembled_capacity(moms_slab; bc=zero(T))
+    pflags = periodic_flags(model.bc_border, N)
+    ops_slab = DiffusionOps(cap_slab; periodic=pflags)
+
+    model.cap_slab = cap_slab
+    model.ops_slab = ops_slab
+    model.Vn .= moms_n.V
+    model.Vn1 .= moms_n1.V
+    return model
+end
+
+function _build_moving_slab!(
+    model::MovingDiffusionModelDiph{N,T},
+    t::T,
+    dt::T,
+) where {N,T}
+    xyz_space = grid1d(model.grid)
+    moms1_n = _space_moments_at_time(model, xyz_space, t, 1)
+    moms1_n1 = _space_moments_at_time(model, xyz_space, t + dt, 1)
+    moms2_n = _space_moments_at_time(model, xyz_space, t, 2)
+    moms2_n1 = _space_moments_at_time(model, xyz_space, t + dt, 2)
+
+    stgrid = SpaceTimeCartesianGrid(model.grid, T[t, t + dt])
+    xyz_st = grid1d(stgrid)
+    body1_st = (x...) -> begin
+        xs = SVector{N,T}(ntuple(d -> convert(T, x[d]), N))
+        _phase_levelset_value(model, 1, xs, convert(T, x[N + 1]))
+    end
+    body2_st = (x...) -> begin
+        xs = SVector{N,T}(ntuple(d -> convert(T, x[d]), N))
+        _phase_levelset_value(model, 2, xs, convert(T, x[N + 1]))
+    end
+
+    moms1_st = geometric_moments(body1_st, xyz_st, T, nan; method=model.geom_method)
+    moms2_st = geometric_moments(body2_st, xyz_st, T, nan; method=model.geom_method)
+    moms1_slab = reduce_slab_to_space(moms1_st, model.grid.n)
+    moms2_slab = reduce_slab_to_space(moms2_st, model.grid.n)
+
+    cap1_slab = assembled_capacity(moms1_slab; bc=zero(T))
+    cap2_slab = assembled_capacity(moms2_slab; bc=zero(T))
+    pflags = periodic_flags(model.bc_border, N)
+    ops1_slab = DiffusionOps(cap1_slab; periodic=pflags)
+    ops2_slab = DiffusionOps(cap2_slab; periodic=pflags)
+
+    model.cap1_slab = cap1_slab
+    model.ops1_slab = ops1_slab
+    model.cap2_slab = cap2_slab
+    model.ops2_slab = ops2_slab
+    model.V1n .= moms1_n.V
+    model.V1n1 .= moms1_n1.V
+    model.V2n .= moms2_n.V
+    model.V2n1 .= moms2_n1.V
+    return model
 end
 
 function _interface_mask(cap::AssembledCapacity{N,T}) where {N,T}
@@ -570,6 +892,247 @@ function assemble_unsteady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono
     return sys
 end
 
+function assemble_unsteady_mono_moving!(
+    sys::LinearSystem{T},
+    model::MovingDiffusionModelMono{N,T},
+    uⁿ,
+    t::T,
+    dt::T;
+    scheme=:CN,
+) where {N,T}
+    dt > zero(T) || throw(ArgumentError("dt must be positive"))
+    θ = _theta_from_scheme(T, scheme)
+    psip, psim = _psi_functions(scheme)
+
+    _build_moving_slab!(model, t, dt)
+    cap = something(model.cap_slab)
+    ops = something(model.ops_slab)
+
+    nt = cap.ntotal
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω), last(lay.γ)))
+
+    ufull = if length(uⁿ) == nsys
+        Vector{T}(uⁿ)
+    elseif length(uⁿ) == nt
+        v = zeros(T, nsys)
+        v[lay.ω] .= Vector{T}(uⁿ)
+        v
+    else
+        v = zeros(T, nsys)
+        v[lay.ω] .= Vector{T}(uⁿ[lay.ω])
+        if length(uⁿ) >= last(lay.γ)
+            v[lay.γ] .= Vector{T}(uⁿ[lay.γ])
+        end
+        v
+    end
+
+    K, C, J, L = _weighted_core_ops(cap, ops, model.D, t + θ * dt, model.coeff_mode)
+    α, β, gγ = _interface_diagonals_mono(cap, model.bc_interface, t + dt)
+    fω_n = _source_values_mono(cap, model.source, t)
+    fω_n1 = _source_values_mono(cap, model.source, t + dt)
+
+    M1 = spdiagm(0 => model.Vn1)
+    M0 = spdiagm(0 => model.Vn)
+    Ψp = spdiagm(0 => T[psip(model.Vn[i], model.Vn1[i]) for i in 1:nt])
+    Ψm = spdiagm(0 => T[psim(model.Vn[i], model.Vn1[i]) for i in 1:nt])
+
+    Iβ = spdiagm(0 => β)
+    Iα = spdiagm(0 => α)
+    Iγ = cap.Γ
+
+    A11 = M1 + θ * (K * Ψp)
+    A12 = -(M1 - M0) + θ * (C * Ψp)
+    A21 = Iβ * J
+    A22 = Iβ * L + Iα * Iγ
+    if model.bc_interface === nothing
+        A12 = spzeros(T, nt, nt)
+        A21 = spzeros(T, nt, nt)
+        A22 = spdiagm(0 => ones(T, nt))
+    end
+
+    uω = Vector{T}(ufull[lay.ω])
+    uγ = Vector{T}(ufull[lay.γ])
+    bω = (M0 - (one(T) - θ) * (K * Ψm)) * uω
+    bω .-= (one(T) - θ) .* ((C * Ψm) * uγ)
+    bω .+= θ .* (cap.V * fω_n1) .+ (one(T) - θ) .* (cap.V * fω_n)
+    bγ = Iγ * gγ
+
+    A, b = if _is_canonical_mono_layout(lay, nt)
+        ([A11 A12; A21 A22], vcat(bω, bγ))
+    else
+        Awork = spzeros(T, nsys, nsys)
+        bwork = zeros(T, nsys)
+        _insert_block!(Awork, lay.ω, lay.ω, A11)
+        _insert_block!(Awork, lay.ω, lay.γ, A12)
+        _insert_block!(Awork, lay.γ, lay.ω, A21)
+        _insert_block!(Awork, lay.γ, lay.γ, A22)
+        _insert_vec!(bwork, lay.ω, bω)
+        _insert_vec!(bwork, lay.γ, bγ)
+        (Awork, bwork)
+    end
+
+    sys.A = A
+    sys.b = b
+    length(sys.x) == nsys || (sys.x = zeros(T, nsys))
+    sys.cache = nothing
+
+    apply_box_bc_mono!(sys.A, sys.b, cap, ops, model.D, model.bc_border; t=t + θ * dt, layout=model.layout)
+    active_rows = _mono_row_activity(cap, lay)
+    sys.A, sys.b = _apply_row_identity_constraints!(sys.A, sys.b, active_rows)
+    return sys
+end
+
+function assemble_unsteady_diph_moving!(
+    sys::LinearSystem{T},
+    model::MovingDiffusionModelDiph{N,T},
+    uⁿ,
+    t::T,
+    dt::T;
+    scheme=:CN,
+) where {N,T}
+    dt > zero(T) || throw(ArgumentError("dt must be positive"))
+    θ = _theta_from_scheme(T, scheme)
+    psip, psim = _psi_functions(scheme)
+
+    _build_moving_slab!(model, t, dt)
+    cap1 = something(model.cap1_slab)
+    ops1 = something(model.ops1_slab)
+    cap2 = something(model.cap2_slab)
+    ops2 = something(model.ops2_slab)
+
+    nt = cap1.ntotal
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+
+    ufull = if length(uⁿ) == nsys
+        Vector{T}(uⁿ)
+    elseif length(uⁿ) == 2 * nt
+        v = zeros(T, nsys)
+        v[lay.ω1] .= Vector{T}(uⁿ[1:nt])
+        v[lay.ω2] .= Vector{T}(uⁿ[(nt + 1):(2 * nt)])
+        v
+    else
+        throw(DimensionMismatch("uⁿ length must be $(2 * nt) (ω1+ω2) or $nsys (full system)"))
+    end
+
+    K1, C1, J1, L1 = _weighted_core_ops(cap1, ops1, model.D1, t + θ * dt, model.coeff_mode)
+    K2, C2, J2, L2 = _weighted_core_ops(cap2, ops2, model.D2, t + θ * dt, model.coeff_mode)
+    f1_n, f2_n = _source_values_diph(cap1, model.source1, cap2, model.source2, t)
+    f1_n1, f2_n1 = _source_values_diph(cap1, model.source1, cap2, model.source2, t + dt)
+    αs1, αs2, βs1, βs2, gs, αf1, αf2, βf1, βf2, gf = _interface_coupling_diph(cap1, cap2, model.ic, t + dt)
+
+    M1n = spdiagm(0 => model.V1n)
+    M1n1 = spdiagm(0 => model.V1n1)
+    M2n = spdiagm(0 => model.V2n)
+    M2n1 = spdiagm(0 => model.V2n1)
+    Ψ1p = spdiagm(0 => T[psip(model.V1n[i], model.V1n1[i]) for i in 1:nt])
+    Ψ1m = spdiagm(0 => T[psim(model.V1n[i], model.V1n1[i]) for i in 1:nt])
+    Ψ2p = spdiagm(0 => T[psip(model.V2n[i], model.V2n1[i]) for i in 1:nt])
+    Ψ2m = spdiagm(0 => T[psim(model.V2n[i], model.V2n1[i]) for i in 1:nt])
+
+    Iαs1 = spdiagm(0 => αs1)
+    Iαs2 = spdiagm(0 => αs2)
+    Iβs1 = spdiagm(0 => βs1)
+    Iβs2 = spdiagm(0 => βs2)
+    Iαf1 = spdiagm(0 => αf1)
+    Iαf2 = spdiagm(0 => αf2)
+    Iβf1 = spdiagm(0 => βf1)
+    Iβf2 = spdiagm(0 => βf2)
+
+    A11 = M1n1 + θ * (K1 * Ψ1p)
+    A12 = -(M1n1 - M1n) + θ * (C1 * Ψ1p)
+    A33 = M2n1 + θ * (K2 * Ψ2p)
+    A34 = -(M2n1 - M2n) + θ * (C2 * Ψ2p)
+
+    uω1 = Vector{T}(ufull[lay.ω1])
+    uγ1 = Vector{T}(ufull[lay.γ1])
+    uω2 = Vector{T}(ufull[lay.ω2])
+    uγ2 = Vector{T}(ufull[lay.γ2])
+    bω1 = (M1n - (one(T) - θ) * (K1 * Ψ1m)) * uω1
+    bω1 .-= (one(T) - θ) .* ((C1 * Ψ1m) * uγ1)
+    bω1 .+= θ .* (cap1.V * f1_n1) .+ (one(T) - θ) .* (cap1.V * f1_n)
+    bω2 = (M2n - (one(T) - θ) * (K2 * Ψ2m)) * uω2
+    bω2 .-= (one(T) - θ) .* ((C2 * Ψ2m) * uγ2)
+    bω2 .+= θ .* (cap2.V * f2_n1) .+ (one(T) - θ) .* (cap2.V * f2_n)
+
+    Z = spzeros(T, nt, nt)
+    I = spdiagm(0 => ones(T, nt))
+    A21 = Z
+    A22 = I
+    A23 = Z
+    A24 = Z
+    A41 = Z
+    A42 = Z
+    A43 = Z
+    A44 = I
+    bγ1 = zeros(T, nt)
+    bγ2 = zeros(T, nt)
+
+    if !(model.ic === nothing)
+        has_scalar = !(model.ic.scalar === nothing)
+        has_flux = !(model.ic.flux === nothing)
+
+        if has_scalar
+            A21 = Iβs1 * J1
+            A22 = Iβs1 * L1 - Iαs1
+            A23 = -(Iβs2 * J2)
+            A24 = -(Iβs2 * L2) + Iαs2
+            bγ1 = gs
+        end
+        if has_flux
+            A41 = Iβf1 * J1
+            A42 = Iβf1 * L1 - Iαf1
+            A43 = Iβf2 * J2
+            A44 = Iβf2 * L2 + Iαf2
+            bγ2 = gf
+        end
+    end
+
+    A, b = if _is_canonical_diph_layout(lay, nt)
+        (
+            [A11 A12 Z Z;
+             A21 A22 A23 A24;
+             Z Z A33 A34;
+             A41 A42 A43 A44],
+            vcat(bω1, bγ1, bω2, bγ2),
+        )
+    else
+        Awork = spzeros(T, nsys, nsys)
+        bwork = zeros(T, nsys)
+        _insert_block!(Awork, lay.ω1, lay.ω1, A11)
+        _insert_block!(Awork, lay.ω1, lay.γ1, A12)
+        _insert_block!(Awork, lay.γ1, lay.ω1, A21)
+        _insert_block!(Awork, lay.γ1, lay.γ1, A22)
+        _insert_block!(Awork, lay.γ1, lay.ω2, A23)
+        _insert_block!(Awork, lay.γ1, lay.γ2, A24)
+        _insert_block!(Awork, lay.ω2, lay.ω2, A33)
+        _insert_block!(Awork, lay.ω2, lay.γ2, A34)
+        _insert_block!(Awork, lay.γ2, lay.ω1, A41)
+        _insert_block!(Awork, lay.γ2, lay.γ1, A42)
+        _insert_block!(Awork, lay.γ2, lay.ω2, A43)
+        _insert_block!(Awork, lay.γ2, lay.γ2, A44)
+        _insert_vec!(bwork, lay.ω1, bω1)
+        _insert_vec!(bwork, lay.γ1, bγ1)
+        _insert_vec!(bwork, lay.ω2, bω2)
+        _insert_vec!(bwork, lay.γ2, bγ2)
+        (Awork, bwork)
+    end
+
+    sys.A = A
+    sys.b = b
+    length(sys.x) == nsys || (sys.x = zeros(T, nsys))
+    sys.cache = nothing
+
+    layω1 = UnknownLayout(nt, (ω=lay.ω1,))
+    layω2 = UnknownLayout(nt, (ω=lay.ω2,))
+    apply_box_bc_mono!(sys.A, sys.b, cap1, ops1, model.D1, model.bc_border; t=t + θ * dt, layout=layω1)
+    apply_box_bc_mono!(sys.A, sys.b, cap2, ops2, model.D2, model.bc_border; t=t + θ * dt, layout=layω2)
+    active_rows = _diph_row_activity(cap1, cap2, lay)
+    sys.A, sys.b = _apply_row_identity_constraints!(sys.A, sys.b, active_rows)
+    return sys
+end
+
 function assemble_steady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N,T}, t::T) where {N,T}
     nt = model.cap1.ntotal
     lay = model.layout.offsets
@@ -866,6 +1429,38 @@ function _init_unsteady_state_mono(model::DiffusionModelMono{N,T}, u0) where {N,
     return u
 end
 
+function _init_unsteady_state_moving(model::MovingDiffusionModelMono{N,T}, u0) where {N,T}
+    lay = model.layout.offsets
+    nt = prod(model.grid.n)
+    nsys = maximum((last(lay.ω), last(lay.γ)))
+    u = zeros(T, nsys)
+    if length(u0) == nsys
+        u .= Vector{T}(u0)
+    elseif length(u0) == nt
+        u[lay.ω] .= Vector{T}(u0)
+    else
+        throw(DimensionMismatch("u0 length must be $nt (ω block) or $nsys (full system)"))
+    end
+    return u
+end
+
+function _init_unsteady_state_moving(model::MovingDiffusionModelDiph{N,T}, u0) where {N,T}
+    lay = model.layout.offsets
+    nt = prod(model.grid.n)
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+    u = zeros(T, nsys)
+    if length(u0) == nsys
+        u .= Vector{T}(u0)
+    elseif length(u0) == 2 * nt
+        u0v = Vector{T}(u0)
+        u[lay.ω1] .= u0v[1:nt]
+        u[lay.ω2] .= u0v[(nt + 1):(2 * nt)]
+    else
+        throw(DimensionMismatch("u0 length must be $(2 * nt) (ω1+ω2) or $nsys (full system)"))
+    end
+    return u
+end
+
 function _init_unsteady_state_diph(model::DiffusionModelDiph{N,T}, u0) where {N,T}
     lay = model.layout.offsets
     nt = model.cap1.ntotal
@@ -959,6 +1554,92 @@ function _set_constant_rhs_diph!(
     return b
 end
 
+function solve_unsteady_moving!(
+    model::MovingDiffusionModelMono{N,T},
+    u0,
+    tspan::Tuple{T,T};
+    dt::T,
+    scheme=:CN,
+    method::Symbol=:direct,
+    save_history::Bool=true,
+    kwargs...,
+) where {N,T}
+    t0, tend = tspan
+    tend >= t0 || throw(ArgumentError("tspan must satisfy tend >= t0"))
+    dt > zero(T) || throw(ArgumentError("dt must be positive"))
+    _theta_from_scheme(T, scheme) # validates accepted scheme values
+
+    u = _init_unsteady_state_moving(model, u0)
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω), last(lay.γ)))
+
+    times = T[t0]
+    states = Vector{Vector{T}}()
+    save_history && push!(states, copy(u))
+
+    sys = LinearSystem(spzeros(T, nsys, nsys), zeros(T, nsys); x=copy(u))
+    tol = sqrt(eps(T)) * max(one(T), abs(t0), abs(tend))
+    t = t0
+
+    while t < tend - tol
+        dt_step = min(dt, tend - t)
+        assemble_unsteady_mono_moving!(sys, model, u, t, dt_step; scheme=scheme)
+        solve!(sys; method=method, reuse_factorization=false, kwargs...)
+        u .= sys.x
+        t += dt_step
+        push!(times, t)
+        save_history && push!(states, copy(u))
+    end
+    if !save_history
+        states = [copy(u)]
+        times = T[t]
+    end
+    return (times=times, states=states, system=sys, reused_constant_operator=false)
+end
+
+function solve_unsteady_moving!(
+    model::MovingDiffusionModelDiph{N,T},
+    u0,
+    tspan::Tuple{T,T};
+    dt::T,
+    scheme=:CN,
+    method::Symbol=:direct,
+    save_history::Bool=true,
+    kwargs...,
+) where {N,T}
+    t0, tend = tspan
+    tend >= t0 || throw(ArgumentError("tspan must satisfy tend >= t0"))
+    dt > zero(T) || throw(ArgumentError("dt must be positive"))
+    _theta_from_scheme(T, scheme) # validates accepted scheme values
+
+    u = _init_unsteady_state_moving(model, u0)
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+
+    times = T[t0]
+    states = Vector{Vector{T}}()
+    save_history && push!(states, copy(u))
+
+    sys = LinearSystem(spzeros(T, nsys, nsys), zeros(T, nsys); x=copy(u))
+    tol = sqrt(eps(T)) * max(one(T), abs(t0), abs(tend))
+    t = t0
+
+    while t < tend - tol
+        dt_step = min(dt, tend - t)
+        assemble_unsteady_diph_moving!(sys, model, u, t, dt_step; scheme=scheme)
+        solve!(sys; method=method, reuse_factorization=false, kwargs...)
+        u .= sys.x
+        t += dt_step
+        push!(times, t)
+        save_history && push!(states, copy(u))
+    end
+    if !save_history
+        states = [copy(u)]
+        times = T[t]
+    end
+    return (times=times, states=states, system=sys, reused_constant_operator=false)
+end
+
 function solve_unsteady!(
     model::DiffusionModelMono{N,T},
     u0,
@@ -1028,6 +1709,50 @@ function solve_unsteady!(
         times = T[t]
     end
     return (times=times, states=states, system=sys, reused_constant_operator=false)
+end
+
+function solve_unsteady!(
+    model::MovingDiffusionModelMono{N,T},
+    u0,
+    tspan::Tuple{T,T};
+    dt::T,
+    scheme=:CN,
+    method::Symbol=:direct,
+    save_history::Bool=true,
+    kwargs...,
+) where {N,T}
+    return solve_unsteady_moving!(
+        model,
+        u0,
+        tspan;
+        dt=dt,
+        scheme=scheme,
+        method=method,
+        save_history=save_history,
+        kwargs...,
+    )
+end
+
+function solve_unsteady!(
+    model::MovingDiffusionModelDiph{N,T},
+    u0,
+    tspan::Tuple{T,T};
+    dt::T,
+    scheme=:CN,
+    method::Symbol=:direct,
+    save_history::Bool=true,
+    kwargs...,
+) where {N,T}
+    return solve_unsteady_moving!(
+        model,
+        u0,
+        tspan;
+        dt=dt,
+        scheme=scheme,
+        method=method,
+        save_history=save_history,
+        kwargs...,
+    )
 end
 
 function solve_unsteady!(

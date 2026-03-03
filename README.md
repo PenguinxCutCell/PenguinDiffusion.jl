@@ -13,8 +13,10 @@
 |---|---|---|---|
 | Models | Monophasic steady | Implemented | `DiffusionModelMono` + `assemble_steady_mono!` |
 | Models | Monophasic unsteady | Implemented | Theta-form assembly path via `assemble_unsteady_mono!` |
+| Models | Monophasic unsteady moving geometry (space-time slab) | Implemented | `MovingDiffusionModelMono` + `assemble_unsteady_mono_moving!` + `solve_unsteady_moving!` |
 | Models | Diphasic steady | Implemented | `DiffusionModelDiph` + `assemble_steady_diph!` |
 | Models | Diphasic unsteady | Implemented | Theta-form assembly path + inactive `ω/γ` regularization for cut-cell robustness |
+| Models | Diphasic unsteady moving geometry (space-time slab) | Implemented | `MovingDiffusionModelDiph` + `assemble_unsteady_diph_moving!` + `solve_unsteady_moving!` |
 | Outer BCs | Dirichlet | Implemented | Face-based contribution in matrix + RHS |
 | Outer BCs | Neumann | Implemented | Default behavior is homogeneous Neumann (`0`) |
 | Outer BCs | Periodic | Implemented | Paired periodic sides supported |

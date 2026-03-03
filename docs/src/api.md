@@ -8,6 +8,14 @@ Types
   - Fields: `ops::DiffusionOps`, `cap::AssembledCapacity`, `D::DT` (diffusivity or callback), `source::ST`, `bc_border::BorderConditions`, `bc_interface::IT`, `layout::UnknownLayout`.
   - Construct with `DiffusionModelMono(cap, ops, D; source=..., bc_border=..., bc_interface=..., layout=...)`.
 
+- `MovingDiffusionModelMono{N,T,...}`
+  - Fields: `grid::CartesianGrid`, `body` (time-dependent level set), `D`, `source`, `bc_border`, `bc_interface`, `layout`, `coeff_mode`, `geom_method`, and per-step caches (`cap_slab`, `ops_slab`, `Vn`, `Vn1`).
+  - Construct with `MovingDiffusionModelMono(grid, body, D; source=..., bc_border=..., bc_interface=..., coeff_mode=..., geom_method=...)`.
+
+- `MovingDiffusionModelDiph{N,T,...}`
+  - Fields: `grid::CartesianGrid`, `body1`, optional `body2` (defaults to `-body1`), per-phase `D1/D2`, `source1/source2`, `bc_border`, `ic`, `layout`, `coeff_mode`, `geom_method`, and per-step caches (`cap1_slab/ops1_slab/V1n/V1n1`, `cap2_slab/ops2_slab/V2n/V2n1`).
+  - Construct with `MovingDiffusionModelDiph(grid, body1, D1, D2; source=..., body2=nothing, bc_border=..., ic=..., coeff_mode=..., geom_method=...)`.
+
 - `DiffusionModelDiph{N,T,D1T,D2T,ST,IT}`
   - Fields: `D1`, `D2` (per-phase diffusivities), similar other fields.
   - Construct with `DiffusionModelDiph(cap, ops, D1, D2; ...)`.
@@ -18,9 +26,15 @@ Key functions
 - `assemble_unsteady_mono!(sys::LinearSystem, model::DiffusionModelMono, uⁿ, t::T, dt::T, scheme)`
 - `assemble_steady_diph!(sys::LinearSystem, model::DiffusionModelDiph, t::T)`
 - `assemble_unsteady_diph!(sys::LinearSystem, model::DiffusionModelDiph, uⁿ, t::T, dt::T, scheme)`
+- `assemble_unsteady_mono_moving!(sys::LinearSystem, model::MovingDiffusionModelMono, uⁿ, t::T, dt::T; scheme=:CN|:BE)`
+- `assemble_unsteady_diph_moving!(sys::LinearSystem, model::MovingDiffusionModelDiph, uⁿ, t::T, dt::T; scheme=:CN|:BE)`
 - `solve_steady!(model::DiffusionModelMono; t::T=zero(T), method::Symbol=:direct, kwargs...)`
 - `solve_steady!(model::DiffusionModelDiph; t::T=zero(T), method::Symbol=:direct, kwargs...)`
 - `solve_unsteady!(model::DiffusionModelMono, u0, tspan; dt, scheme=:BE|:CN|θ, method=:direct, save_history=true, kwargs...)`
+- `solve_unsteady!(model::MovingDiffusionModelMono, u0, tspan; dt, scheme=:BE|:CN, method=:direct, save_history=true, kwargs...)`
+- `solve_unsteady_moving!(model::MovingDiffusionModelMono, u0, tspan; dt, scheme=:BE|:CN, method=:direct, save_history=true, kwargs...)`
+- `solve_unsteady!(model::MovingDiffusionModelDiph, u0, tspan; dt, scheme=:BE|:CN, method=:direct, save_history=true, kwargs...)`
+- `solve_unsteady_moving!(model::MovingDiffusionModelDiph, u0, tspan; dt, scheme=:BE|:CN, method=:direct, save_history=true, kwargs...)`
 - `solve_unsteady!(model::DiffusionModelDiph, u0, tspan; dt, scheme=:BE|:CN|θ, method=:direct, save_history=true, kwargs...)`
 
 Callbacks and arguments
@@ -37,7 +51,8 @@ Layout and offsets
 Boundary conditions
 
 - `bc_border::BorderConditions` supports `Dirichlet`, `Neumann`, `Robin`, and `Periodic` on domain boundaries.
-- `bc_interface::InterfaceConditions` supports `ScalarJump`, `FluxJump`, and `RobinJump` types to represent embedded-interface constraints.
+- Monophasic interface BC uses `PenguinBCs.Robin(α, β, g)`.
+- Diphasic interface BC uses `InterfaceConditions` (`ScalarJump`, `FluxJump`, `RobinJump`).
 
 Helpers
 

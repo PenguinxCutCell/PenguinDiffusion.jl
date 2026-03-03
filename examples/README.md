@@ -21,11 +21,15 @@ Available examples:
   2D Poisson inside a disk with embedded Robin condition.
 - `examples/2D/Diffusion/Heat_robin.jl`:
   2D unsteady heat diffusion inside a disk with embedded Robin condition (uses `solve_unsteady!`).
+- `examples/2D/Diffusion/MovingHeat_robin.jl`:
+  2D moving-geometry manufactured transient heat case inside an oscillating disk with embedded Robin condition (uses `solve_unsteady_moving!`).
 - `examples/1D/Diffusion/Poisson_nobody_neumann_mms.jl`:
   1D manufactured Poisson, no embedded body, Neumann box boundaries.
 - `examples/1D/Diffusion/Poisson_2ph.jl`:
   1D diphasic Poisson with embedded interface continuity conditions.
 - `examples/2D/Diffusion/Heat_2ph.jl`:
   2D diphasic unsteady heat manufactured solution (uses `solve_unsteady!`).
+- `examples/2D/Diffusion/MovingHeat_2ph.jl`:
+  2D diphasic moving-geometry manufactured transient heat case (uses `solve_unsteady_moving!`).
 - `examples/3D/Diffusion/Poisson_outside_sphere_embedded_dirichlet.jl`:
   3D manufactured Poisson outside a sphere, embedded Dirichlet interface and analytical Dirichlet on the outer box.

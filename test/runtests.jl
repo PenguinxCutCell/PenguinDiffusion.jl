@@ -3,6 +3,7 @@ using LinearAlgebra
 using SparseArrays
 
 using CartesianGeometry: geometric_moments, nan
+using CartesianGrids: CartesianGrid
 using CartesianOperators
 using PenguinBCs
 using PenguinDiffusion
@@ -575,4 +576,260 @@ end
     assemble_unsteady_diph!(sys, model, u0, 0.0, 0.01, 1.0)
     solve!(sys; method=:direct)
     @test all(isfinite, sys.x)
+end
+
+@testset "Moving mono constant invariance under motion (2D)" begin
+    grid = CartesianGrid((0.0, 0.0), (1.0, 1.0), (25, 25))
+    body(x, y, t) = sqrt((x - (0.5 + 0.03 * sin(2pi * t)))^2 + (y - 0.5)^2) - 0.28
+    for Tconst in (1.0, 0.0)
+        bc = BorderConditions(; left=Dirichlet(Tconst), right=Dirichlet(Tconst), bottom=Dirichlet(Tconst), top=Dirichlet(Tconst))
+        ic = PenguinBCs.Robin(1.0, 0.0, Tconst)
+        model = MovingDiffusionModelMono(
+            grid,
+            body,
+            1.0;
+            source=0.0,
+            bc_border=bc,
+            bc_interface=ic,
+            geom_method=:vofijul,
+        )
+
+        u0 = fill(Tconst, prod(grid.n))
+        sol = solve_unsteady_moving!(model, u0, (0.0, 0.06); dt=0.02, scheme=:BE, save_history=false)
+        cap = model.cap_slab
+        @test !(cap === nothing)
+
+        ω = sol.system.x[model.layout.offsets.ω]
+        idxω = active_physical_indices(cap)
+        @test !isempty(idxω)
+        @test maximum(abs.(ω[idxω] .- Tconst)) < 1e-10
+    end
+end
+
+@testset "Moving mono D=0 mass consistency" begin
+    grid = CartesianGrid((0.0,), (1.0,), (65,))
+    body(x, t) = abs(x - (0.45 + 0.05 * t)) - 0.25
+    bc = BorderConditions(; left=Periodic(), right=Periodic())
+    model = MovingDiffusionModelMono(
+        grid,
+        body,
+        0.0;
+        source=0.0,
+        bc_border=bc,
+        bc_interface=nothing,
+        geom_method=:vofijul,
+    )
+
+    u0 = [1.0 + 0.2 * sin(2pi * (i - 1) / (prod(grid.n) - 1)) for i in 1:prod(grid.n)]
+    sol = solve_unsteady_moving!(model, u0, (0.0, 0.02); dt=0.02, scheme=:BE, save_history=false)
+    cap = model.cap_slab
+    @test !(cap === nothing)
+
+    idxω = active_physical_indices(cap)
+    lay = model.layout.offsets
+    ω1 = sol.system.x[lay.ω]
+    m0 = sum(model.Vn[i] * u0[i] for i in idxω)
+    m1 = sum(model.Vn1[i] * ω1[i] for i in idxω)
+    rel = abs(m1 - m0) / max(abs(m0), 1e-14)
+    @test rel < 1e-10
+end
+
+@testset "Moving mono stationary-interface equivalence (BE)" begin
+    grid_space = (range(0.0, 1.0; length=65),)
+    xγ = 0.53
+    body_space(x) = x - xγ
+    body_time(x, t) = x - xγ
+    bc = BorderConditions(; left=Dirichlet(0.0), right=Dirichlet(0.0))
+    ic = PenguinBCs.Robin(1.0, 0.0, 0.0)
+
+    moms = geometric_moments(body_space, grid_space, Float64, nan; method=:vofijul)
+    cap = assembled_capacity(moms; bc=0.0)
+    ops = DiffusionOps(cap; periodic=periodic_flags(bc, 1))
+    model_static = DiffusionModelMono(cap, ops, 1.0; source=0.0, bc_border=bc, bc_interface=ic)
+
+    lay = model_static.layout.offsets
+    nsys = last(lay.γ)
+    u0 = zeros(Float64, nsys)
+    idxω = active_physical_indices(cap)
+    for i in idxω
+        u0[lay.ω[i]] = sin(pi * cap.C_ω[i][1])
+    end
+
+    sys_static = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_unsteady_mono!(sys_static, model_static, u0, 0.0, 0.02, 1.0)
+    solve!(sys_static; method=:direct, reuse_factorization=false)
+
+    grid = CartesianGrid((0.0,), (1.0,), (65,))
+    model_moving = MovingDiffusionModelMono(
+        grid,
+        body_time,
+        1.0;
+        source=0.0,
+        bc_border=bc,
+        bc_interface=ic,
+        geom_method=:vofijul,
+    )
+    sys_moving = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_unsteady_mono_moving!(sys_moving, model_moving, u0, 0.0, 0.02; scheme=:BE)
+    solve!(sys_moving; method=:direct, reuse_factorization=false)
+
+    err = norm(sys_moving.x[lay.ω] - sys_static.x[lay.ω]) / max(norm(sys_static.x[lay.ω]), 1e-14)
+    @test err < 5e-4
+end
+
+@testset "Moving mono fresh/dead shock robustness (2D)" begin
+    grid = CartesianGrid((0.0, 0.0), (1.0, 1.0), (33, 33))
+    dt = 0.02
+    shift = 0.12
+    body(x, y, t) = sqrt((x - (0.35 + shift * (t / dt)))^2 + (y - 0.5)^2) - 0.2
+    bc = BorderConditions(; left=Dirichlet(1.0), right=Dirichlet(1.0), bottom=Dirichlet(1.0), top=Dirichlet(1.0))
+    ic = PenguinBCs.Robin(1.0, 0.0, 1.0)
+    model = MovingDiffusionModelMono(
+        grid,
+        body,
+        1.0;
+        source=0.0,
+        bc_border=bc,
+        bc_interface=ic,
+        geom_method=:vofijul,
+    )
+
+    u0 = ones(Float64, prod(grid.n))
+    sol = solve_unsteady_moving!(model, u0, (0.0, dt); dt=dt, scheme=:BE, save_history=false)
+    @test all(isfinite, sol.system.x)
+    @test maximum(abs, sol.system.x) <= 2.0
+
+    cap = model.cap_slab
+    @test !(cap === nothing)
+    LI = LinearIndices(cap.nnodes)
+    for I in CartesianIndices(cap.nnodes)
+        i = LI[I]
+        if I[1] < cap.nnodes[1] && I[2] < cap.nnodes[2]
+            @test isfinite(model.Vn[i]) && model.Vn[i] >= 0.0
+            @test isfinite(model.Vn1[i]) && model.Vn1[i] >= 0.0
+            @test isfinite(cap.buf.Γ[i]) && cap.buf.Γ[i] >= 0.0
+        end
+    end
+
+    tol = 1e-12
+    became_active = count(i -> abs(model.Vn[i]) <= tol && abs(model.Vn1[i]) > tol, eachindex(model.Vn))
+    became_inactive = count(i -> abs(model.Vn[i]) > tol && abs(model.Vn1[i]) <= tol, eachindex(model.Vn))
+    @test became_active + became_inactive > 0
+end
+
+@testset "Moving diphasic constant invariance under motion (1D)" begin
+    grid = CartesianGrid((0.0,), (1.0,), (65,))
+    body(x, t) = x - (0.45 + 0.04 * sin(2pi * t))
+    bc = BorderConditions(; left=Dirichlet(0.7), right=Dirichlet(0.7))
+    ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
+    model = MovingDiffusionModelDiph(
+        grid,
+        body,
+        1.0,
+        1.0;
+        source=(0.0, 0.0),
+        bc_border=bc,
+        ic=ic,
+        geom_method=:vofijul,
+    )
+
+    nt = prod(grid.n)
+    u0 = vcat(fill(0.7, nt), fill(0.7, nt))
+    sol = solve_unsteady_moving!(model, u0, (0.0, 0.06); dt=0.02, scheme=:BE, save_history=false)
+    @test all(isfinite, sol.system.x)
+    @test !(model.cap1_slab === nothing)
+    @test !(model.cap2_slab === nothing)
+
+    lay = model.layout.offsets
+    u1 = sol.system.x[lay.ω1]
+    u2 = sol.system.x[lay.ω2]
+    idx1 = active_physical_indices(model.cap1_slab)
+    idx2 = active_physical_indices(model.cap2_slab)
+    @test !isempty(idx1)
+    @test !isempty(idx2)
+    @test maximum(abs.(u1[idx1] .- 0.7)) < 2e-3
+    @test maximum(abs.(u2[idx2] .- 0.7)) < 2e-3
+end
+
+@testset "Moving diphasic stationary-interface equivalence (BE)" begin
+    grid_space = (range(0.0, 1.0; length=65),)
+    xγ = 0.53
+    body_space(x) = x - xγ
+    body_time(x, t) = x - xγ
+    bc = BorderConditions(; left=Dirichlet(0.0), right=Dirichlet(0.0))
+    ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
+
+    moms1 = geometric_moments(body_space, grid_space, Float64, nan; method=:vofijul)
+    moms2 = geometric_moments((x) -> -body_space(x), grid_space, Float64, nan; method=:vofijul)
+    cap1 = assembled_capacity(moms1; bc=0.0)
+    cap2 = assembled_capacity(moms2; bc=0.0)
+    ops1 = DiffusionOps(cap1; periodic=periodic_flags(bc, 1))
+    ops2 = DiffusionOps(cap2; periodic=periodic_flags(bc, 1))
+    model_static = DiffusionModelDiph(cap1, ops1, 1.3, 0.0, cap2, ops2, 0.7, 0.0; bc_border=bc, ic=ic)
+
+    lay = model_static.layout.offsets
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+    u0 = zeros(Float64, nsys)
+    idx1 = active_physical_indices(cap1)
+    idx2 = active_physical_indices(cap2)
+    for i in idx1
+        u0[lay.ω1[i]] = sin(pi * cap1.C_ω[i][1])
+    end
+    for i in idx2
+        u0[lay.ω2[i]] = 0.5 * sin(2pi * cap2.C_ω[i][1])
+    end
+
+    sys_static = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_unsteady_diph!(sys_static, model_static, u0, 0.0, 0.02, 1.0)
+    solve!(sys_static; method=:direct, reuse_factorization=false)
+
+    grid = CartesianGrid((0.0,), (1.0,), (65,))
+    model_moving = MovingDiffusionModelDiph(
+        grid,
+        body_time,
+        1.3,
+        0.7;
+        source=(0.0, 0.0),
+        bc_border=bc,
+        ic=ic,
+        geom_method=:vofijul,
+    )
+    sys_moving = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_unsteady_diph_moving!(sys_moving, model_moving, u0, 0.0, 0.02; scheme=:BE)
+    solve!(sys_moving; method=:direct, reuse_factorization=false)
+
+    err1 = norm(sys_moving.x[lay.ω1] - sys_static.x[lay.ω1]) / max(norm(sys_static.x[lay.ω1]), 1e-14)
+    err2 = norm(sys_moving.x[lay.ω2] - sys_static.x[lay.ω2]) / max(norm(sys_static.x[lay.ω2]), 1e-14)
+    @test err1 < 2e-3
+    @test err2 < 2e-3
+end
+
+@testset "Moving diphasic fresh/dead shock robustness (1D)" begin
+    grid = CartesianGrid((0.0,), (1.0,), (81,))
+    dt = 0.02
+    shift = 0.12
+    body(x, t) = x - (0.35 + shift * (t / dt))
+    bc = BorderConditions(; left=Dirichlet(1.0), right=Dirichlet(1.0))
+    ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
+    model = MovingDiffusionModelDiph(
+        grid,
+        body,
+        1.0,
+        1.0;
+        source=(0.0, 0.0),
+        bc_border=bc,
+        ic=ic,
+        geom_method=:vofijul,
+    )
+
+    nt = prod(grid.n)
+    u0 = vcat(ones(Float64, nt), ones(Float64, nt))
+    sol = solve_unsteady_moving!(model, u0, (0.0, dt); dt=dt, scheme=:BE, save_history=false)
+    @test all(isfinite, sol.system.x)
+    @test maximum(abs, sol.system.x) <= 2.0
+
+    tol = 1e-12
+    became_active = count(i -> abs(model.V1n[i]) <= tol && abs(model.V1n1[i]) > tol, eachindex(model.V1n))
+    became_inactive = count(i -> abs(model.V1n[i]) > tol && abs(model.V1n1[i]) <= tol, eachindex(model.V1n))
+    @test became_active + became_inactive > 0
 end
