@@ -833,3 +833,23 @@ end
     became_inactive = count(i -> abs(model.V1n[i]) > tol && abs(model.V1n1[i]) <= tol, eachindex(model.V1n))
     @test became_active + became_inactive > 0
 end
+
+@testset "Outer Robin manufactured linear solution 1D" begin
+    u_exact(x) = x
+    dudx = 1.0
+
+    αL, βL = 1.6, 0.7
+    αR, βR = 0.9, 0.4
+    # Outward normal derivative: left -> -dudx, right -> +dudx.
+    gL = αL * u_exact(0.0) + βL * (-dudx)
+    gR = αR * u_exact(1.0) + βR * dudx
+
+    bc = BorderConditions(; left=Robin(αL, βL, gL), right=Robin(αR, βR, gR))
+    grid = (range(0.0, 1.0; length=129),)
+    cap, model, sys = solve_mono(grid, bc, 0.0)
+    u = sys.x[model.layout.offsets.ω]
+
+    phys = physical_indices(cap.nnodes)
+    maxerr = maximum(abs.(u[phys] .- map(i -> u_exact(cap.C_ω[i][1]), phys)))
+    @test maxerr < 2e-2
+end

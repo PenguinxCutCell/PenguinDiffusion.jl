@@ -20,7 +20,7 @@
 | Outer BCs | Dirichlet | Implemented | Face-based contribution in matrix + RHS |
 | Outer BCs | Neumann | Implemented | Default behavior is homogeneous Neumann (`0`) |
 | Outer BCs | Periodic | Implemented | Paired periodic sides supported |
-| Outer BCs | Robin (outer box) | Missing | Explicitly not supported in current BC applier |
+| Outer BCs | Robin (outer box) | Implemented | Face-based contribution in matrix + RHS |
 | Time scheme | Backward Euler (`θ=1`) | Implemented | Covered by regression/order tests |
 | Time scheme | Crank–Nicolson (`θ=1/2`) | Implemented | Theta assembly path validated with dedicated temporal-order test |
 | Coefficients | Constant diffusion coefficient | Implemented | Scalar coefficient support |
