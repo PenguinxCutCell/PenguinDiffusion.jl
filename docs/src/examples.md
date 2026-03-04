@@ -30,6 +30,13 @@ Available diffusion examples
   - Check: volume-weighted `L2` error at final time.
   - Uses `solve_unsteady_moving!(...; scheme=:BE)`.
 
+- `examples/2D/Diffusion/MovingHeat_robin_real.jl`
+  - 2D unsteady heat diffusion on a moving domain (oscillating disk).
+  - Embedded interface condition: true Robin `Robin(alpha, beta, g)` with `alpha != 0` and `beta != 0`.
+  - Analytical reference: manufactured smooth transient affine field in space with exponential time factor.
+  - Check: volume-weighted `L2` error at final time.
+  - Uses `solve_unsteady_moving!(...; scheme=:BE)`.
+
 - `examples/1D/Diffusion/Poisson_nobody_neumann_mms.jl`
   - 1D manufactured steady Poisson with no embedded body (`body = -1`).
   - Outer boundary conditions: homogeneous Neumann on both sides.
@@ -54,6 +61,15 @@ Available diffusion examples
     - `u2=exp(-8*pi^2*t)*sin(2*pi*x)sin(2*pi*y)`
   - Check: phase-wise volume-weighted `L2` errors at final time.
   - Uses `solve_unsteady!(...; scheme=:CN)` and reports operator reuse.
+
+- `examples/2D/Diffusion/Heat_2ph_disk_transfer_metrics.jl`
+  - 2D diphasic unsteady diffusion around a disk (legacy transfer benchmark setup).
+  - Interface conditions: `ScalarJump(He, 1, 0)` and `FluxJump(Dg, Dl, 0)`.
+  - Post-processing: `compute_interface_exchange_metrics` for mean flux, mean interface value,
+    exchange coefficient, and generic dimensionless transfer index.
+  - Includes a cross-check against the legacy manual expression
+    `H' * Winv * (G*uω + H*uγ)` and a semi-analytical reference.
+  - Uses `solve_unsteady!(...; scheme=:BE)`.
 
 - `examples/2D/Diffusion/MovingHeat_2ph.jl`
   - 2D diphasic unsteady heat on a moving domain (oscillating interface).

@@ -16,6 +16,7 @@ export assemble_steady_mono!, assemble_unsteady_mono!
 export assemble_steady_diph!, assemble_unsteady_diph!
 export assemble_unsteady_mono_moving!, assemble_unsteady_diph_moving!
 export solve_steady!, solve_unsteady!, solve_unsteady_moving!
+export compute_interface_exchange_metrics
 
 struct DiffusionModelMono{N,T,DT,ST,IT}
     ops::DiffusionOps{N,T}
@@ -793,6 +794,208 @@ function _weighted_core_ops(
     return K, C, J, L
 end
 
+function _resolve_diffusivity_scale(diffusivity_scale, D, ::Type{T}) where {T}
+    if diffusivity_scale === nothing
+        D isa Number || throw(ArgumentError("diffusivity_scale must be provided when diffusivity is not a scalar number"))
+        return convert(T, D)
+    end
+    diffusivity_scale isa Number || throw(ArgumentError("diffusivity_scale must be a scalar number"))
+    return convert(T, diffusivity_scale)
+end
+
+function _resolve_diph_diffusivity_scales(diffusivity_scale, D1, D2, ::Type{T}) where {T}
+    if diffusivity_scale === nothing
+        (D1 isa Number && D2 isa Number) ||
+            throw(ArgumentError("diffusivity_scale=(d1,d2) must be provided when phase diffusivities are not scalar numbers"))
+        return convert(T, D1), convert(T, D2)
+    end
+    (diffusivity_scale isa Tuple && length(diffusivity_scale) == 2) ||
+        throw(ArgumentError("diffusivity_scale must be a 2-tuple `(d1, d2)` for diphasic models"))
+    d1, d2 = diffusivity_scale
+    (d1 isa Number && d2 isa Number) ||
+        throw(ArgumentError("diffusivity_scale entries must be scalar numbers"))
+    return convert(T, d1), convert(T, d2)
+end
+
+function _resolve_diph_reference_values(reference_value, ::Type{T}) where {T}
+    if reference_value isa Tuple
+        length(reference_value) == 2 || throw(ArgumentError("reference_value tuple must have length 2"))
+        return convert(T, reference_value[1]), convert(T, reference_value[2])
+    end
+    return convert(T, reference_value), convert(T, reference_value)
+end
+
+function _phase_exchange_metrics(
+    cap::AssembledCapacity{N,T},
+    ops::DiffusionOps{N,T},
+    uω::AbstractVector{T},
+    uγ::AbstractVector{T},
+    diffusivity_scale::T,
+    characteristic_scale::T,
+    reference_value::T,
+) where {N,T}
+    nt = cap.ntotal
+    length(uω) == nt || throw(DimensionMismatch("length(uω) must be $nt"))
+    length(uγ) == nt || throw(DimensionMismatch("length(uγ) must be $nt"))
+    characteristic_scale > zero(T) || throw(ArgumentError("characteristic_scale must be positive"))
+    iszero(diffusivity_scale) && throw(ArgumentError("diffusivity_scale must be non-zero"))
+
+    # q_nds is the per-interface-cell integrated normal gradient contribution.
+    q_nds = ops.H' * (ops.Winv * (ops.G * uω + ops.H * uγ))
+    Γ = cap.buf.Γ
+
+    interface_measure = zero(T)
+    integrated_normal_gradient = zero(T)
+    weighted_interface_value = zero(T)
+    @inbounds for i in eachindex(Γ)
+        γ = Γ[i]
+        qi = q_nds[i]
+        ui = uγ[i]
+        if isfinite(γ) && γ > zero(T) && isfinite(qi) && isfinite(ui)
+            interface_measure += γ
+            integrated_normal_gradient += qi
+            weighted_interface_value += ui * γ
+        end
+    end
+    interface_measure > zero(T) || throw(ArgumentError("no active interface cells found in provided capacity"))
+
+    integrated_normal_flux = -diffusivity_scale * integrated_normal_gradient
+    mean_normal_gradient = integrated_normal_gradient / interface_measure
+    mean_normal_flux = integrated_normal_flux / interface_measure
+    mean_interface_value = weighted_interface_value / interface_measure
+
+    Δref = mean_interface_value - reference_value
+    exchange_coefficient = iszero(Δref) ? T(NaN) : (mean_normal_flux / Δref)
+    transfer_index = exchange_coefficient * characteristic_scale / diffusivity_scale
+
+    return (
+        interface_measure=interface_measure,
+        integrated_normal_gradient=integrated_normal_gradient,
+        integrated_normal_flux=integrated_normal_flux,
+        mean_normal_gradient=mean_normal_gradient,
+        mean_normal_flux=mean_normal_flux,
+        mean_interface_value=mean_interface_value,
+        reference_value=reference_value,
+        exchange_coefficient=exchange_coefficient,
+        transfer_index=transfer_index,
+    )
+end
+
+function _extract_mono_state(
+    state::AbstractVector,
+    lay,
+    ::Type{T},
+) where {T}
+    length(state) >= last(lay.γ) || throw(DimensionMismatch("state vector does not contain the mono γ block"))
+    return Vector{T}(state[lay.ω]), Vector{T}(state[lay.γ])
+end
+
+function _extract_diph_state(
+    state::AbstractVector,
+    lay,
+    ::Type{T},
+) where {T}
+    length(state) >= last(lay.γ2) || throw(DimensionMismatch("state vector does not contain the diph γ2 block"))
+    uω1 = Vector{T}(state[lay.ω1])
+    uγ1 = Vector{T}(state[lay.γ1])
+    uω2 = Vector{T}(state[lay.ω2])
+    uγ2 = Vector{T}(state[lay.γ2])
+    return uω1, uγ1, uω2, uγ2
+end
+
+"""
+    compute_interface_exchange_metrics(model, state; diffusivity_scale=nothing, characteristic_scale=1, reference_value=0)
+
+Compute generic interface-transfer diagnostics from a solved state:
+- integrated and mean normal gradient
+- integrated and mean normal diffusive flux
+- mean interface value
+- an exchange coefficient relative to `reference_value`
+- a generic dimensionless transfer index (`exchange_coefficient * characteristic_scale / diffusivity_scale`)
+
+For diphasic models, returns `(phase1=..., phase2=..., flux_balance=...)`.
+"""
+function compute_interface_exchange_metrics(
+    model::DiffusionModelMono{N,T},
+    state::AbstractVector;
+    diffusivity_scale=nothing,
+    characteristic_scale::Real=one(T),
+    reference_value=zero(T),
+) where {N,T}
+    dscale = _resolve_diffusivity_scale(diffusivity_scale, model.D, T)
+    L = convert(T, characteristic_scale)
+    cref = convert(T, reference_value)
+    lay = model.layout.offsets
+    uω, uγ = _extract_mono_state(state, lay, T)
+    return _phase_exchange_metrics(model.cap, model.ops, uω, uγ, dscale, L, cref)
+end
+
+function compute_interface_exchange_metrics(
+    model::MovingDiffusionModelMono{N,T},
+    state::AbstractVector;
+    diffusivity_scale=nothing,
+    characteristic_scale::Real=one(T),
+    reference_value=zero(T),
+) where {N,T}
+    cap = model.cap_slab
+    cap === nothing && throw(ArgumentError("moving mono model has no slab capacity; assemble at least one moving step first"))
+    ops = model.ops_slab
+    ops === nothing && throw(ArgumentError("moving mono model has no slab operators; assemble at least one moving step first"))
+    dscale = _resolve_diffusivity_scale(diffusivity_scale, model.D, T)
+    L = convert(T, characteristic_scale)
+    cref = convert(T, reference_value)
+    lay = model.layout.offsets
+    uω, uγ = _extract_mono_state(state, lay, T)
+    return _phase_exchange_metrics(cap, ops, uω, uγ, dscale, L, cref)
+end
+
+function compute_interface_exchange_metrics(
+    model::DiffusionModelDiph{N,T},
+    state::AbstractVector;
+    diffusivity_scale=nothing,
+    characteristic_scale::Real=one(T),
+    reference_value=zero(T),
+) where {N,T}
+    d1, d2 = _resolve_diph_diffusivity_scales(diffusivity_scale, model.D1, model.D2, T)
+    c1, c2 = _resolve_diph_reference_values(reference_value, T)
+    L = convert(T, characteristic_scale)
+    lay = model.layout.offsets
+    uω1, uγ1, uω2, uγ2 = _extract_diph_state(state, lay, T)
+
+    m1 = _phase_exchange_metrics(model.cap1, model.ops1, uω1, uγ1, d1, L, c1)
+    m2 = _phase_exchange_metrics(model.cap2, model.ops2, uω2, uγ2, d2, L, c2)
+    return (phase1=m1, phase2=m2, flux_balance=(m1.integrated_normal_flux + m2.integrated_normal_flux))
+end
+
+function compute_interface_exchange_metrics(
+    model::MovingDiffusionModelDiph{N,T},
+    state::AbstractVector;
+    diffusivity_scale=nothing,
+    characteristic_scale::Real=one(T),
+    reference_value=zero(T),
+) where {N,T}
+    cap1 = model.cap1_slab
+    cap1 === nothing && throw(ArgumentError("moving diph model has no phase-1 slab capacity; assemble at least one moving step first"))
+    cap2 = model.cap2_slab
+    cap2 === nothing && throw(ArgumentError("moving diph model has no phase-2 slab capacity; assemble at least one moving step first"))
+    ops1 = model.ops1_slab
+    ops1 === nothing && throw(ArgumentError("moving diph model has no phase-1 slab operators; assemble at least one moving step first"))
+    ops2 = model.ops2_slab
+    ops2 === nothing && throw(ArgumentError("moving diph model has no phase-2 slab operators; assemble at least one moving step first"))
+    d1, d2 = _resolve_diph_diffusivity_scales(diffusivity_scale, model.D1, model.D2, T)
+    c1, c2 = _resolve_diph_reference_values(reference_value, T)
+    L = convert(T, characteristic_scale)
+    lay = model.layout.offsets
+    uω1, uγ1, uω2, uγ2 = _extract_diph_state(state, lay, T)
+
+    m1 = _phase_exchange_metrics(cap1, ops1, uω1, uγ1, d1, L, c1)
+    m2 = _phase_exchange_metrics(cap2, ops2, uω2, uγ2, d2, L, c2)
+    return (phase1=m1, phase2=m2, flux_balance=(m1.integrated_normal_flux + m2.integrated_normal_flux))
+end
+
+compute_interface_exchange_metrics(model, sys::LinearSystem; kwargs...) =
+    compute_interface_exchange_metrics(model, sys.x; kwargs...)
+
 function _is_canonical_mono_layout(lay, nt::Int)
     return lay.ω == (1:nt) && lay.γ == ((nt + 1):(2 * nt))
 end
@@ -928,7 +1131,8 @@ function assemble_unsteady_mono_moving!(
     end
 
     K, C, J, L = _weighted_core_ops(cap, ops, model.D, t + θ * dt, model.coeff_mode)
-    α, β, gγ = _interface_diagonals_mono(cap, model.bc_interface, t + dt)
+    α, β, gγ_n1 = _interface_diagonals_mono(cap, model.bc_interface, t + dt)
+    _, _, gγ_n = _interface_diagonals_mono(cap, model.bc_interface, t)
     fω_n = _source_values_mono(cap, model.source, t)
     fω_n1 = _source_values_mono(cap, model.source, t + dt)
 
@@ -943,8 +1147,8 @@ function assemble_unsteady_mono_moving!(
 
     A11 = M1 + θ * (K * Ψp)
     A12 = -(M1 - M0) + θ * (C * Ψp)
-    A21 = Iβ * J
-    A22 = Iβ * L + Iα * Iγ
+    A21 = Iβ * J * Ψp
+    A22 = Iβ * L * Ψp + Iα * Iγ
     if model.bc_interface === nothing
         A12 = spzeros(T, nt, nt)
         A21 = spzeros(T, nt, nt)
@@ -956,7 +1160,7 @@ function assemble_unsteady_mono_moving!(
     bω = (M0 - (one(T) - θ) * (K * Ψm)) * uω
     bω .-= (one(T) - θ) .* ((C * Ψm) * uγ)
     bω .+= θ .* (cap.V * fω_n1) .+ (one(T) - θ) .* (cap.V * fω_n)
-    bγ = Iγ * gγ
+    bγ = θ .* Iγ * gγ_n1 .+ (one(T) - θ) .* Iγ * gγ_n
 
     A, b = if _is_canonical_mono_layout(lay, nt)
         ([A11 A12; A21 A22], vcat(bω, bγ))

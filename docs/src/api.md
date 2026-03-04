@@ -36,6 +36,8 @@ Key functions
 - `solve_unsteady!(model::MovingDiffusionModelDiph, u0, tspan; dt, scheme=:BE|:CN, method=:direct, save_history=true, kwargs...)`
 - `solve_unsteady_moving!(model::MovingDiffusionModelDiph, u0, tspan; dt, scheme=:BE|:CN, method=:direct, save_history=true, kwargs...)`
 - `solve_unsteady!(model::DiffusionModelDiph, u0, tspan; dt, scheme=:BE|:CN|θ, method=:direct, save_history=true, kwargs...)`
+- `compute_interface_exchange_metrics(model, state_or_system; diffusivity_scale=nothing, characteristic_scale=1, reference_value=0)`:
+  computes generic interface-transfer outputs (integrated/mean normal gradient, integrated/mean flux, mean interface value, exchange coefficient, and a dimensionless transfer index). For diphasic models, returns per-phase metrics and a flux-balance indicator.
 
 Callbacks and arguments
 

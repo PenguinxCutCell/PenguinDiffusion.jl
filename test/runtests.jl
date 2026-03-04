@@ -174,6 +174,44 @@ function weighted_energy(cap, uω, idx)
     return e
 end
 
+function manual_phase_exchange_metrics(cap, ops, uω, uγ, diffusivity_scale, characteristic_scale, reference_value)
+    q_nds = ops.H' * (ops.Winv * (ops.G * uω + ops.H * uγ))
+    Γ = cap.buf.Γ
+
+    interface_measure = 0.0
+    integrated_normal_gradient = 0.0
+    weighted_interface_value = 0.0
+    for i in eachindex(Γ)
+        γ = Γ[i]
+        qi = q_nds[i]
+        ui = uγ[i]
+        if isfinite(γ) && γ > 0.0 && isfinite(qi) && isfinite(ui)
+            interface_measure += γ
+            integrated_normal_gradient += qi
+            weighted_interface_value += ui * γ
+        end
+    end
+
+    integrated_normal_flux = -diffusivity_scale * integrated_normal_gradient
+    mean_normal_gradient = integrated_normal_gradient / interface_measure
+    mean_normal_flux = integrated_normal_flux / interface_measure
+    mean_interface_value = weighted_interface_value / interface_measure
+    exchange_coefficient = mean_normal_flux / (mean_interface_value - reference_value)
+    transfer_index = exchange_coefficient * characteristic_scale / diffusivity_scale
+
+    return (
+        interface_measure=interface_measure,
+        integrated_normal_gradient=integrated_normal_gradient,
+        integrated_normal_flux=integrated_normal_flux,
+        mean_normal_gradient=mean_normal_gradient,
+        mean_normal_flux=mean_normal_flux,
+        mean_interface_value=mean_interface_value,
+        reference_value=reference_value,
+        exchange_coefficient=exchange_coefficient,
+        transfer_index=transfer_index,
+    )
+end
+
 @testset "Node-lattice halo slab convention" begin
     cases = (
         (range(0.0, 1.0; length=7),),
@@ -603,6 +641,10 @@ end
         idxω = active_physical_indices(cap)
         @test !isempty(idxω)
         @test maximum(abs.(ω[idxω] .- Tconst)) < 1e-10
+
+        metrics = compute_interface_exchange_metrics(model, sol.system; characteristic_scale=0.2, reference_value=Tconst - 1.0)
+        @test metrics.interface_measure > 0.0
+        @test isfinite(metrics.mean_normal_flux)
     end
 end
 
@@ -749,6 +791,11 @@ end
     @test !isempty(idx2)
     @test maximum(abs.(u1[idx1] .- 0.7)) < 2e-3
     @test maximum(abs.(u2[idx2] .- 0.7)) < 2e-3
+
+    metrics = compute_interface_exchange_metrics(model, sol.system; characteristic_scale=0.2, reference_value=(0.0, 0.0))
+    @test metrics.phase1.interface_measure > 0.0
+    @test metrics.phase2.interface_measure > 0.0
+    @test isfinite(metrics.flux_balance)
 end
 
 @testset "Moving diphasic stationary-interface equivalence (BE)" begin
@@ -852,4 +899,89 @@ end
     phys = physical_indices(cap.nnodes)
     maxerr = maximum(abs.(u[phys] .- map(i -> u_exact(cap.C_ω[i][1]), phys)))
     @test maxerr < 2e-2
+end
+
+@testset "Generic interface exchange metrics utility" begin
+    # Mono phase: compare utility output to direct operator-based computation.
+    xγ = 0.53
+    grid = (range(0.0, 1.0; length=61),)
+    moms = geometric_moments((x) -> x - xγ, grid, Float64, nan; method=:vofijul)
+    cap = assembled_capacity(moms; bc=0.0)
+    bc = BorderConditions(; left=Dirichlet(1.0), right=Dirichlet(0.0))
+    ops = DiffusionOps(cap; periodic=periodic_flags(bc, 1))
+    model = DiffusionModelMono(cap, ops, 1.7; source=0.0, bc_border=bc, bc_interface=PenguinBCs.Robin(1.0, 0.0, 0.0))
+    sys = solve_steady!(model)
+
+    L = 0.35
+    cref = 0.2
+    metrics = compute_interface_exchange_metrics(model, sys; characteristic_scale=L, reference_value=cref)
+    metrics_state = compute_interface_exchange_metrics(model, sys.x; characteristic_scale=L, reference_value=cref)
+    @test metrics == metrics_state
+
+    lay = model.layout.offsets
+    uω = sys.x[lay.ω]
+    uγ = sys.x[lay.γ]
+    manual = manual_phase_exchange_metrics(cap, ops, uω, uγ, 1.7, L, cref)
+
+    @test isapprox(metrics.interface_measure, manual.interface_measure; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics.integrated_normal_gradient, manual.integrated_normal_gradient; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics.integrated_normal_flux, manual.integrated_normal_flux; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics.mean_normal_gradient, manual.mean_normal_gradient; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics.mean_normal_flux, manual.mean_normal_flux; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics.mean_interface_value, manual.mean_interface_value; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics.exchange_coefficient, manual.exchange_coefficient; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics.transfer_index, manual.transfer_index; atol=1e-12, rtol=1e-12)
+
+    model_varD = DiffusionModelMono(cap, ops, (x, t) -> 1.0; source=0.0, bc_border=bc, bc_interface=PenguinBCs.Robin(1.0, 0.0, 0.0))
+    @test_throws ArgumentError compute_interface_exchange_metrics(model_varD, sys.x)
+    metrics_varD = compute_interface_exchange_metrics(model_varD, sys.x; diffusivity_scale=1.0, characteristic_scale=L, reference_value=cref)
+    @test isfinite(metrics_varD.transfer_index)
+
+    cap_full = assembled_capacity(full_moments(grid); bc=0.0)
+    ops_full = DiffusionOps(cap_full; periodic=periodic_flags(bc, 1))
+    model_full = DiffusionModelMono(cap_full, ops_full, 1.0; source=0.0, bc_border=bc, bc_interface=PenguinBCs.Robin(1.0, 0.0, 0.0))
+    sys_full = solve_steady!(model_full)
+    @test_throws ArgumentError compute_interface_exchange_metrics(model_full, sys_full)
+
+    # Diphasic: check both phases and flux-balance metric.
+    moms1 = geometric_moments((x) -> x - xγ, grid, Float64, nan; method=:vofijul)
+    moms2 = geometric_moments((x) -> -(x - xγ), grid, Float64, nan; method=:vofijul)
+    cap1 = assembled_capacity(moms1; bc=0.0)
+    cap2 = assembled_capacity(moms2; bc=0.0)
+    ops1 = DiffusionOps(cap1; periodic=periodic_flags(bc, 1))
+    ops2 = DiffusionOps(cap2; periodic=periodic_flags(bc, 1))
+    ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
+    model_diph = DiffusionModelDiph(cap1, ops1, 1.3, 0.0, cap2, ops2, 0.8, 0.0; bc_border=bc, ic=ic)
+    sys_diph = solve_steady!(model_diph)
+
+    Ld = 0.5
+    refs = (0.1, -0.2)
+    metrics_diph = compute_interface_exchange_metrics(model_diph, sys_diph; characteristic_scale=Ld, reference_value=refs)
+
+    layd = model_diph.layout.offsets
+    uω1 = sys_diph.x[layd.ω1]
+    uγ1 = sys_diph.x[layd.γ1]
+    uω2 = sys_diph.x[layd.ω2]
+    uγ2 = sys_diph.x[layd.γ2]
+    manual1 = manual_phase_exchange_metrics(cap1, ops1, uω1, uγ1, 1.3, Ld, refs[1])
+    manual2 = manual_phase_exchange_metrics(cap2, ops2, uω2, uγ2, 0.8, Ld, refs[2])
+
+    @test isapprox(metrics_diph.phase1.interface_measure, manual1.interface_measure; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics_diph.phase1.integrated_normal_flux, manual1.integrated_normal_flux; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics_diph.phase1.mean_interface_value, manual1.mean_interface_value; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics_diph.phase1.exchange_coefficient, manual1.exchange_coefficient; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics_diph.phase1.transfer_index, manual1.transfer_index; atol=1e-12, rtol=1e-12)
+
+    @test isapprox(metrics_diph.phase2.interface_measure, manual2.interface_measure; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics_diph.phase2.integrated_normal_flux, manual2.integrated_normal_flux; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics_diph.phase2.mean_interface_value, manual2.mean_interface_value; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics_diph.phase2.exchange_coefficient, manual2.exchange_coefficient; atol=1e-12, rtol=1e-12)
+    @test isapprox(metrics_diph.phase2.transfer_index, manual2.transfer_index; atol=1e-12, rtol=1e-12)
+
+    @test isapprox(
+        metrics_diph.flux_balance,
+        metrics_diph.phase1.integrated_normal_flux + metrics_diph.phase2.integrated_normal_flux;
+        atol=0.0,
+        rtol=0.0,
+    )
 end

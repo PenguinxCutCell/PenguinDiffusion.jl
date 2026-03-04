@@ -23,12 +23,19 @@ Available examples:
   2D unsteady heat diffusion inside a disk with embedded Robin condition (uses `solve_unsteady!`).
 - `examples/2D/Diffusion/MovingHeat_robin.jl`:
   2D moving-geometry manufactured transient heat case inside an oscillating disk with embedded Robin condition (uses `solve_unsteady_moving!`).
+- `examples/2D/Diffusion/MovingHeat_robin_real.jl`:
+  2D moving-geometry manufactured transient heat case with a true embedded Robin condition (`alpha != 0`, `beta != 0`) to exercise the full interface assembly path.
 - `examples/1D/Diffusion/Poisson_nobody_neumann_mms.jl`:
   1D manufactured Poisson, no embedded body, Neumann box boundaries.
 - `examples/1D/Diffusion/Poisson_2ph.jl`:
   1D diphasic Poisson with embedded interface continuity conditions.
 - `examples/2D/Diffusion/Heat_2ph.jl`:
   2D diphasic unsteady heat manufactured solution (uses `solve_unsteady!`).
+- `examples/2D/Diffusion/Heat_2ph_disk_transfer_metrics.jl`:
+  2D diphasic unsteady disk-transfer benchmark with post-processing via
+  `compute_interface_exchange_metrics` (generic exchange coefficient and
+  dimensionless transfer index), plus comparison to the legacy manual
+  interface-flux assembly path.
 - `examples/2D/Diffusion/MovingHeat_2ph.jl`:
   2D diphasic moving-geometry manufactured transient heat case (uses `solve_unsteady_moving!`).
 - `examples/3D/Diffusion/Poisson_outside_sphere_embedded_dirichlet.jl`:
