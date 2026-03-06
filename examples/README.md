@@ -37,7 +37,8 @@ Available examples:
   2D diphasic unsteady heat manufactured solution (uses `solve_unsteady!`).
 - `examples/2D/Diffusion/Poisson_2ph_robinjump_mms.jl`:
   2D diphasic steady manufactured Robin-jump case with small x-refinement
-  sweep and interface residual checks for `RobinJump + FluxJump`.
+  sweep and interface residual checks for `RobinJump + FluxJump`, using
+  `PenguinAnalysis.lp_error` / `pairwise_orders` for weighted error norms.
 - `examples/2D/Diffusion/Heat_2ph_disk_transfer_metrics.jl`:
   2D diphasic unsteady disk-transfer benchmark with post-processing via
   `compute_interface_exchange_metrics` (generic exchange coefficient and

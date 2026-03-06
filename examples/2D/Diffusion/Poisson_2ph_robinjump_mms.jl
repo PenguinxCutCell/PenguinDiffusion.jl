@@ -1,21 +1,8 @@
 using CartesianGeometry: geometric_moments, nan
 using CartesianOperators
 using PenguinBCs
+using PenguinAnalysis
 using PenguinDiffusion
-
-function active_phase_indices(cap)
-    idx = Int[]
-    LI = LinearIndices(cap.nnodes)
-    N = length(cap.nnodes)
-    for I in CartesianIndices(cap.nnodes)
-        i = LI[I]
-        halo = any(d -> I[d] == cap.nnodes[d], 1:N)
-        if !halo && isfinite(cap.buf.V[i]) && cap.buf.V[i] > 0.0
-            push!(idx, i)
-        end
-    end
-    return idx
-end
 
 interface_indices(cap) = findall(i -> isfinite(cap.buf.Γ[i]) && cap.buf.Γ[i] > 0.0, 1:cap.ntotal)
 
@@ -54,8 +41,9 @@ q1_density = k1 * m1
 q2_density = -k2 * m2
 gγ = α * (u2_exact(ξ, 0.0) - u1_exact(ξ, 0.0)) + β * (q1_density - q2_density) * hy
 
-errs1 = Float64[]
-errs2 = Float64[]
+errs1 = Float64[]  # weighted L2_h on phase 1 support
+errs2 = Float64[]  # weighted L2_h on phase 2 support
+errs12 = Float64[] # weighted combined L2_h over both phases
 flux_res = Float64[]
 robin_res = Float64[]
 hs = Float64[]
@@ -88,12 +76,19 @@ for nx in (33, 65, 129)
     uω2 = sys.x[lay.ω2]
     uγ2 = sys.x[lay.γ2]
 
-    idx1 = active_phase_indices(cap1)
-    idx2 = active_phase_indices(cap2)
-    err1 = sqrt(sum((uω1[i] - u1_exact(cap1.C_ω[i]...))^2 for i in idx1) / length(idx1))
-    err2 = sqrt(sum((uω2[i] - u2_exact(cap2.C_ω[i]...))^2 for i in idx2) / length(idx2))
+    u1_ref = [u1_exact(cap1.C_ω[i]...) for i in 1:cap1.ntotal]
+    u2_ref = [u2_exact(cap2.C_ω[i]...) for i in 1:cap2.ntotal]
+
+    # Use PenguinAnalysis weighted norms with explicit capacity adapters.
+    g1 = CellMeasure(cap1.buf.V; celltype=cap1.cell_type)
+    g2 = CellMeasure(cap2.buf.V; celltype=cap2.cell_type)
+
+    err1 = lp_error(uω1, u1_ref, g1; p=2, region=:all)
+    err2 = lp_error(uω2, u2_ref, g2; p=2, region=:all)
+    err12 = lp_error((uω1, uω2), (u1_ref, u2_ref), (g1, g2); p=2, region=:all)
     push!(errs1, err1)
     push!(errs2, err2)
+    push!(errs12, err12)
     push!(hs, step(grid[1]))
 
     idxγ = interface_indices(cap1)
@@ -105,17 +100,24 @@ for nx in (33, 65, 129)
     push!(robin_res, rres)
 
     println("  nx=", nx, ", hx=", step(grid[1]),
-            " | err1=", err1, ", err2=", err2,
+            " | err1=", err1, ", err2=", err2, ", err12=", err12,
             " | flux_res=", fres, ", robin_res=", rres)
 end
 
 println("  max phase-1 error over sweep: ", maximum(errs1))
 println("  max phase-2 error over sweep: ", maximum(errs2))
+println("  max combined error over sweep: ", maximum(errs12))
+if maximum(errs12) > 1e-12
+    println("  pairwise combined orders (PenguinAnalysis): ", pairwise_orders(errs12, hs))
+else
+    println("  pairwise combined orders (PenguinAnalysis): round-off dominated, not meaningful")
+end
 println("  max flux residual over sweep: ", maximum(flux_res))
 println("  max Robin residual over sweep: ", maximum(robin_res))
 
 # The linear manufactured profile should be matched to round-off for this setup.
 @assert maximum(errs1) < 1e-10
 @assert maximum(errs2) < 1e-10
+@assert maximum(errs12) < 1e-10
 @assert maximum(flux_res) < 1e-10
 @assert maximum(robin_res) < 1e-10
