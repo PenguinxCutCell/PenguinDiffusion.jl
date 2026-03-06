@@ -41,3 +41,22 @@
 - With current identity regularization, old `remove_zero_rows_cols!` style trimming usually does not reduce matrix size.
 - If you need better memory efficiency on cut-heavy runs, prefer active-DOF pruning (mask-based reduction) over legacy zero-row trimming.
 - Schur elimination can be competitive in CPU time when `γ << ω`, but needs a dedicated optimized implementation to control allocations.
+
+## Diphasic Interface Usage
+
+```julia
+ic = InterfaceConditions(
+    scalar = RobinJump(α, β, gγ),    # scalar-like row
+    flux   = FluxJump(1.0, 1.0, 0.0) # flux-like row (continuity)
+)
+
+model = DiffusionModelDiph(cap1, ops1, D1, s1, cap2, ops2, D2, s2;
+                           bc_border=bc,
+                           ic=ic)
+```
+
+Notes:
+
+- `γ1` and `γ2` are separate interface unknown blocks.
+- With `scalar = RobinJump(...)`, `uγ1` and `uγ2` are generally not equal.
+- Flux continuity is enforced by the second interface row (`flux = FluxJump(...)`).

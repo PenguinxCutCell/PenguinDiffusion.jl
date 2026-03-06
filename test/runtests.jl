@@ -166,6 +166,23 @@ function active_physical_indices(cap)
     return idx
 end
 
+function active_phase_indices(cap)
+    LI = LinearIndices(cap.nnodes)
+    idx = Int[]
+    for I in CartesianIndices(cap.nnodes)
+        halo = any(d -> I[d] == cap.nnodes[d], 1:length(cap.nnodes))
+        halo && continue
+        i = LI[I]
+        v = cap.buf.V[i]
+        if isfinite(v) && v > 0.0
+            push!(idx, i)
+        end
+    end
+    return idx
+end
+
+interface_indices(cap) = findall(i -> isfinite(cap.buf.Γ[i]) && cap.buf.Γ[i] > 0.0, 1:cap.ntotal)
+
 function weighted_energy(cap, uω, idx)
     e = 0.0
     for i in idx
@@ -538,6 +555,118 @@ end
     solve!(sys; method=:direct)
     @test all(isfinite, sys.x)
     @test maximum(abs.(sys.x[layd.γ1] .- sys.x[layd.γ2])) < 2e-2
+end
+
+@testset "Diphasic Robin jump coupling structure" begin
+    L = 1.0
+    ξ = 0.37
+    α = 2.0
+    β = 0.35
+    gγ = 0.4
+    k1 = 1.5
+    k2 = 0.7
+
+    grid = (range(0.0, L; length=81),)
+    moms1 = geometric_moments((x) -> x - ξ, grid, Float64, nan; method=:vofijul)
+    moms2 = geometric_moments((x) -> -(x - ξ), grid, Float64, nan; method=:vofijul)
+    cap1 = assembled_capacity(moms1; bc=0.0)
+    cap2 = assembled_capacity(moms2; bc=0.0)
+    bc = BorderConditions(; left=Dirichlet(1.0), right=Dirichlet(0.0))
+    ops1 = DiffusionOps(cap1; periodic=periodic_flags(bc, 1))
+    ops2 = DiffusionOps(cap2; periodic=periodic_flags(bc, 1))
+    ic = InterfaceConditions(; scalar=RobinJump(α, β, gγ), flux=FluxJump(1.0, 1.0, 0.0))
+
+    model = DiffusionModelDiph(cap1, ops1, k1, 0.0, cap2, ops2, k2, 0.0; bc_border=bc, ic=ic)
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+    sys = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_steady_diph!(sys, model, 0.0)
+
+    @test norm(sys.A[lay.γ1, lay.ω1]) > 1e-12
+    @test norm(sys.A[lay.γ1, lay.ω2]) > 1e-12
+    @test norm(sys.A[lay.γ1, lay.γ1]) > 1e-12
+    @test norm(sys.A[lay.γ1, lay.γ2]) > 1e-12
+end
+
+@testset "Diphasic steady 1D Robin jump + flux continuity" begin
+    L = 1.0
+    ξ = 0.37
+    U0 = 1.0
+    UL = 0.0
+    α = 2.0
+    β = 0.35
+    gγ = 0.4
+    k1 = 1.5
+    k2 = 0.7
+
+    errs1 = Float64[]
+    errs2 = Float64[]
+
+    for n in (41, 81, 161)
+        grid = (range(0.0, L; length=n),)
+        moms1 = geometric_moments((x) -> x - ξ, grid, Float64, nan; method=:vofijul)
+        moms2 = geometric_moments((x) -> -(x - ξ), grid, Float64, nan; method=:vofijul)
+        cap1 = assembled_capacity(moms1; bc=0.0)
+        cap2 = assembled_capacity(moms2; bc=0.0)
+
+        bc = BorderConditions(; left=Dirichlet(U0), right=Dirichlet(UL))
+        ops1 = DiffusionOps(cap1; periodic=periodic_flags(bc, 1))
+        ops2 = DiffusionOps(cap2; periodic=periodic_flags(bc, 1))
+        ic = InterfaceConditions(
+            ; scalar=RobinJump(α, β, gγ),
+            flux=FluxJump(1.0, 1.0, 0.0),
+        )
+
+        model = DiffusionModelDiph(
+            cap1, ops1, k1, 0.0,
+            cap2, ops2, k2, 0.0;
+            bc_border=bc,
+            ic=ic,
+        )
+        sys = solve_steady!(model)
+        lay = model.layout.offsets
+
+        uω1 = sys.x[lay.ω1]
+        uγ1 = sys.x[lay.γ1]
+        uω2 = sys.x[lay.ω2]
+        uγ2 = sys.x[lay.γ2]
+
+        # Current diphasic Robin-jump convention in assembly:
+        #   α*(u2-u1) + β*(q1-q2) = gγ,  q1 + q2 = 0,
+        # with q1 = k1*∂x u1 (phase 1 on the left) and q2 = -k2*∂x u2 (phase 2 on the right).
+        den = 2 * β - α * (ξ / k1 + (L - ξ) / k2)
+        q = (gγ - α * (UL - U0)) / den
+        T1 = x -> U0 + (q / k1) * x
+        T2 = x -> UL - (q / k2) * (L - x)
+
+        idx1 = active_phase_indices(cap1)
+        idx2 = active_phase_indices(cap2)
+        @test !isempty(idx1)
+        @test !isempty(idx2)
+
+        err1 = sqrt(sum((uω1[i] - T1(cap1.C_ω[i][1]))^2 for i in idx1) / length(idx1))
+        err2 = sqrt(sum((uω2[i] - T2(cap2.C_ω[i][1]))^2 for i in idx2) / length(idx2))
+        push!(errs1, err1)
+        push!(errs2, err2)
+
+        idxγ1 = interface_indices(cap1)
+        idxγ2 = interface_indices(cap2)
+        @test !isempty(idxγ1)
+        @test idxγ1 == idxγ2
+        @test maximum(abs.(uγ1[idxγ1] .- T1.(getindex.(cap1.C_γ[idxγ1], 1)))) < 5e-2
+        @test maximum(abs.(uγ2[idxγ2] .- T2.(getindex.(cap2.C_γ[idxγ2], 1)))) < 5e-2
+
+        q1 = k1 .* (model.ops1.H' * (model.ops1.Winv * (model.ops1.G * uω1 + model.ops1.H * uγ1)))
+        q2 = k2 .* (model.ops2.H' * (model.ops2.Winv * (model.ops2.G * uω2 + model.ops2.H * uγ2)))
+
+        @test maximum(abs.(q1[idxγ1] .+ q2[idxγ1])) < 5e-2
+        @test maximum(abs.(α .* (uγ2[idxγ1] .- uγ1[idxγ1]) .+ β .* (q1[idxγ1] .- q2[idxγ1]) .- gγ)) < 5e-2
+    end
+
+    # Linear manufactured profile should be reproduced to round-off with
+    # constant coefficients and affine interface conditions.
+    @test maximum(errs1) < 1e-9
+    @test maximum(errs2) < 1e-9
 end
 
 @testset "Public solve_unsteady! API (mono+diph)" begin

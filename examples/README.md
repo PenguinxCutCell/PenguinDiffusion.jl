@@ -17,6 +17,10 @@ julia --project=. examples/2D/Diffusion/Poisson_robin.jl
 
 Available examples:
 
+- `examples/steady_1d_diph_robinjump.jl`:
+  1D steady diphasic Robin-jump + flux-continuity validation using
+  `InterfaceConditions(scalar=RobinJump(...), flux=FluxJump(...))`,
+  with analytical profile comparison, interface residual checks, and optional plot output.
 - `examples/2D/Diffusion/Poisson_robin.jl`:
   2D Poisson inside a disk with embedded Robin condition.
 - `examples/2D/Diffusion/Heat_robin.jl`:
@@ -31,6 +35,9 @@ Available examples:
   1D diphasic Poisson with embedded interface continuity conditions.
 - `examples/2D/Diffusion/Heat_2ph.jl`:
   2D diphasic unsteady heat manufactured solution (uses `solve_unsteady!`).
+- `examples/2D/Diffusion/Poisson_2ph_robinjump_mms.jl`:
+  2D diphasic steady manufactured Robin-jump case with small x-refinement
+  sweep and interface residual checks for `RobinJump + FluxJump`.
 - `examples/2D/Diffusion/Heat_2ph_disk_transfer_metrics.jl`:
   2D diphasic unsteady disk-transfer benchmark with post-processing via
   `compute_interface_exchange_metrics` (generic exchange coefficient and

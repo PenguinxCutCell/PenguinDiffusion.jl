@@ -10,6 +10,14 @@ julia --project=. examples/2D/Diffusion/Poisson_robin.jl
 
 Available diffusion examples
 
+- `examples/steady_1d_diph_robinjump.jl`
+  - 1D steady diphasic Robin-jump plus flux-continuity benchmark.
+  - Interface conditions:
+    - scalar row: `RobinJump(α, β, gγ)`
+    - flux row: `FluxJump(1, 1, 0)`
+  - Analytical reference: piecewise linear profile with interface jump from Robin relation.
+  - Reports bulk `L2` errors and interface residuals; optional CairoMakie plot.
+
 - `examples/2D/Diffusion/Poisson_robin.jl`
   - 2D steady Poisson inside a disk.
   - Embedded interface condition: `Robin(alpha, beta, g)`.

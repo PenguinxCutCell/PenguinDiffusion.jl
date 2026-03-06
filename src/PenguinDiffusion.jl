@@ -1274,6 +1274,9 @@ function assemble_unsteady_diph_moving!(
     bγ2 = zeros(T, nt)
 
     if !(model.ic === nothing)
+        # Same γ-row semantics as steady diphasic assembly:
+        #   γ1 row = scalar-like relation (ScalarJump/RobinJump)
+        #   γ2 row = flux-like relation   (FluxJump)
         has_scalar = !(model.ic.scalar === nothing)
         has_flux = !(model.ic.flux === nothing)
 
@@ -1374,6 +1377,16 @@ function assemble_steady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N
         _insert_block!(A, lay.γ1, lay.γ1, spdiagm(0 => ones(T, nt)))
         _insert_block!(A, lay.γ2, lay.γ2, spdiagm(0 => ones(T, nt)))
     else
+        # Diphasic interface unknown blocks:
+        #   γ1 row = scalar-like relation
+        #   γ2 row = flux-like   relation
+        #
+        # Supported combinations:
+        #   scalar = ScalarJump(α1, α2, g)  -> α1*uγ1 - α2*uγ2 = g
+        #   scalar = RobinJump(α, β, g)     -> α*(uγ2-uγ1) + β*(q1-q2) = g
+        #   flux   = FluxJump(β1, β2, g)    -> β1*q1 + β2*q2 = g
+        #
+        # with qk = Jk*uωk + Lk*uγk (already weighted by phase diffusivity).
         has_scalar = !(model.ic.scalar === nothing)
         has_flux = !(model.ic.flux === nothing)
 
