@@ -61,3 +61,9 @@ Helpers
 - Several internal helpers exist but are documented here because they are useful for extending functionality: `_sample_coeff`, `_source_values_mono`, `_interface_diagonals_mono`, and `_insert_block!`.
 
 See the examples page for common usage patterns and test-driven examples.
+
+Canonical API docstrings
+
+```@docs
+PenguinDiffusion.compute_interface_exchange_metrics
+```
