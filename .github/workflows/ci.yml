@@ -59,4 +59,4 @@ jobs:
               PackageSpec(url="https://github.com/PenguinxCutCell/PenguinSolverCore.jl.git"),
               PackageSpec(url="https://github.com/PenguinxCutCell/PenguinBCs.jl.git"),
               PackageSpec(url="https://github.com/PenguinxCutCell/CartesianGrids.jl.git"),
-              PackageSpec(url="https://github.com/PenguinxCutCell/PenguinAnalysis.jl.git"))]); Pkg.instantiate(); Pkg.test()'
+              PackageSpec(url="https://github.com/PenguinxCutCell/PenguinAnalysis.jl.git")]); Pkg.instantiate(); Pkg.test()'
