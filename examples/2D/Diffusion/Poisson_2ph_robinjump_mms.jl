@@ -44,6 +44,9 @@ gγ = α * (u2_exact(ξ, 0.0) - u1_exact(ξ, 0.0)) + β * (q1_density - q2_densi
 errs1 = Float64[]  # weighted L2_h on phase 1 support
 errs2 = Float64[]  # weighted L2_h on phase 2 support
 errs12 = Float64[] # weighted combined L2_h over both phases
+errsγ1 = Float64[]  # weighted interface L2_h on phase 1 γ support
+errsγ2 = Float64[]  # weighted interface L2_h on phase 2 γ support
+errsγ12 = Float64[] # weighted combined interface L2_h
 flux_res = Float64[]
 robin_res = Float64[]
 hs = Float64[]
@@ -89,6 +92,17 @@ for nx in (33, 65, 129)
     push!(errs1, err1)
     push!(errs2, err2)
     push!(errs12, err12)
+
+    uγ1_ref = [u1_exact(cap1.C_γ[i]...) for i in 1:cap1.ntotal]
+    uγ2_ref = [u2_exact(cap2.C_γ[i]...) for i in 1:cap2.ntotal]
+    gγ1 = InterfaceMeasure(cap1.buf.Γ; celltype=cap1.cell_type)
+    gγ2 = InterfaceMeasure(cap2.buf.Γ; celltype=cap2.cell_type)
+    errγ1 = lp_interface_error(uγ1, uγ1_ref, gγ1; p=2)
+    errγ2 = lp_interface_error(uγ2, uγ2_ref, gγ2; p=2)
+    errγ12 = lp_interface_error((uγ1, uγ2), (uγ1_ref, uγ2_ref), (gγ1, gγ2); p=2)
+    push!(errsγ1, errγ1)
+    push!(errsγ2, errγ2)
+    push!(errsγ12, errγ12)
     push!(hs, step(grid[1]))
 
     idxγ = interface_indices(cap1)
@@ -101,16 +115,25 @@ for nx in (33, 65, 129)
 
     println("  nx=", nx, ", hx=", step(grid[1]),
             " | err1=", err1, ", err2=", err2, ", err12=", err12,
+            " | errγ1=", errγ1, ", errγ2=", errγ2, ", errγ12=", errγ12,
             " | flux_res=", fres, ", robin_res=", rres)
 end
 
 println("  max phase-1 error over sweep: ", maximum(errs1))
 println("  max phase-2 error over sweep: ", maximum(errs2))
 println("  max combined error over sweep: ", maximum(errs12))
+println("  max interface phase-1 error over sweep: ", maximum(errsγ1))
+println("  max interface phase-2 error over sweep: ", maximum(errsγ2))
+println("  max combined interface error over sweep: ", maximum(errsγ12))
 if maximum(errs12) > 1e-12
     println("  pairwise combined orders (PenguinAnalysis): ", pairwise_orders(errs12, hs))
 else
     println("  pairwise combined orders (PenguinAnalysis): round-off dominated, not meaningful")
+end
+if maximum(errsγ12) > 1e-12
+    println("  pairwise combined interface orders (PenguinAnalysis): ", pairwise_orders(errsγ12, hs))
+else
+    println("  pairwise combined interface orders (PenguinAnalysis): round-off dominated, not meaningful")
 end
 println("  max flux residual over sweep: ", maximum(flux_res))
 println("  max Robin residual over sweep: ", maximum(robin_res))
@@ -119,5 +142,8 @@ println("  max Robin residual over sweep: ", maximum(robin_res))
 @assert maximum(errs1) < 1e-10
 @assert maximum(errs2) < 1e-10
 @assert maximum(errs12) < 1e-10
+@assert maximum(errsγ1) < 1e-10
+@assert maximum(errsγ2) < 1e-10
+@assert maximum(errsγ12) < 1e-10
 @assert maximum(flux_res) < 1e-10
 @assert maximum(robin_res) < 1e-10

@@ -38,7 +38,12 @@ Available examples:
 - `examples/2D/Diffusion/Poisson_2ph_robinjump_mms.jl`:
   2D diphasic steady manufactured Robin-jump case with small x-refinement
   sweep and interface residual checks for `RobinJump + FluxJump`, using
-  `PenguinAnalysis.lp_error` / `pairwise_orders` for weighted error norms.
+  `PenguinAnalysis.lp_error`, `lp_interface_error`, and `pairwise_orders`
+  for weighted bulk + interface error norms.
+- `examples/2D/Diffusion/Poisson_nobody_h1_mms.jl`:
+  2D manufactured Poisson in a full box (no embedded interface), validating
+  the `PenguinAnalysis.h1_seminorm_error` routine with analytical gradients
+  sampled at staggered barycenters built via `CartesianGeometry.integrate(Tuple{2}, ...)`.
 - `examples/2D/Diffusion/Heat_2ph_disk_transfer_metrics.jl`:
   2D diphasic unsteady disk-transfer benchmark with post-processing via
   `compute_interface_exchange_metrics` (generic exchange coefficient and
