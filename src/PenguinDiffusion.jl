@@ -1145,8 +1145,9 @@ function assemble_unsteady_mono_moving!(
     Iα = spdiagm(0 => α)
     Iγ = cap.Γ
 
-    A11 = M1 + θ * (K * Ψp)
-    A12 = -(M1 - M0) + θ * (C * Ψp)
+    # Ψp/Ψm already encode the selected temporal scheme; do not apply θ twice.
+    A11 = M1 + K * Ψp
+    A12 = -(M1 - M0) + C * Ψp
     A21 = Iβ * J * Ψp
     A22 = Iβ * L * Ψp + Iα * Iγ
     if model.bc_interface === nothing
@@ -1157,8 +1158,8 @@ function assemble_unsteady_mono_moving!(
 
     uω = Vector{T}(ufull[lay.ω])
     uγ = Vector{T}(ufull[lay.γ])
-    bω = (M0 - (one(T) - θ) * (K * Ψm)) * uω
-    bω .-= (one(T) - θ) .* ((C * Ψm) * uγ)
+    bω = (M0 - K * Ψm) * uω
+    bω .-= (C * Ψm) * uγ
     bω .+= θ .* (cap.V * fω_n1) .+ (one(T) - θ) .* (cap.V * fω_n)
     bγ = θ .* Iγ * gγ_n1 .+ (one(T) - θ) .* Iγ * gγ_n
 
@@ -1244,20 +1245,21 @@ function assemble_unsteady_diph_moving!(
     Iβf1 = spdiagm(0 => βf1)
     Iβf2 = spdiagm(0 => βf2)
 
-    A11 = M1n1 + θ * (K1 * Ψ1p)
-    A12 = -(M1n1 - M1n) + θ * (C1 * Ψ1p)
-    A33 = M2n1 + θ * (K2 * Ψ2p)
-    A34 = -(M2n1 - M2n) + θ * (C2 * Ψ2p)
+    # Ψp/Ψm already encode the selected temporal scheme; do not apply θ twice.
+    A11 = M1n1 + K1 * Ψ1p
+    A12 = -(M1n1 - M1n) + C1 * Ψ1p
+    A33 = M2n1 + K2 * Ψ2p
+    A34 = -(M2n1 - M2n) + C2 * Ψ2p
 
     uω1 = Vector{T}(ufull[lay.ω1])
     uγ1 = Vector{T}(ufull[lay.γ1])
     uω2 = Vector{T}(ufull[lay.ω2])
     uγ2 = Vector{T}(ufull[lay.γ2])
-    bω1 = (M1n - (one(T) - θ) * (K1 * Ψ1m)) * uω1
-    bω1 .-= (one(T) - θ) .* ((C1 * Ψ1m) * uγ1)
+    bω1 = (M1n - K1 * Ψ1m) * uω1
+    bω1 .-= (C1 * Ψ1m) * uγ1
     bω1 .+= θ .* (cap1.V * f1_n1) .+ (one(T) - θ) .* (cap1.V * f1_n)
-    bω2 = (M2n - (one(T) - θ) * (K2 * Ψ2m)) * uω2
-    bω2 .-= (one(T) - θ) .* ((C2 * Ψ2m) * uγ2)
+    bω2 = (M2n - K2 * Ψ2m) * uω2
+    bω2 .-= (C2 * Ψ2m) * uγ2
     bω2 .+= θ .* (cap2.V * f2_n1) .+ (one(T) - θ) .* (cap2.V * f2_n)
 
     Z = spzeros(T, nt, nt)
