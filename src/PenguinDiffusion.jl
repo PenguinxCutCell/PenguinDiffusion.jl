@@ -1058,7 +1058,7 @@ function assemble_steady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono{N
 end
 
 function assemble_unsteady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono{N,T}, uⁿ, t::T, dt::T, scheme) where {N,T}
-    θ = scheme isa Real ? convert(T, scheme) : one(T)
+    θ = _theta_from_scheme(T, scheme)
     assemble_steady_mono!(sys, model, t + θ * dt)
 
     lay = model.layout.offsets
@@ -1441,7 +1441,7 @@ function assemble_steady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N
 end
 
 function assemble_unsteady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N,T}, uⁿ, t::T, dt::T, scheme) where {N,T}
-    θ = scheme isa Real ? convert(T, scheme) : one(T)
+    θ = _theta_from_scheme(T, scheme)
     assemble_steady_diph!(sys, model, t + θ * dt)
 
     lay = model.layout.offsets

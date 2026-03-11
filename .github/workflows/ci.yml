@@ -60,3 +60,9 @@ jobs:
               PackageSpec(url="https://github.com/PenguinxCutCell/PenguinBCs.jl.git"),
               PackageSpec(url="https://github.com/PenguinxCutCell/CartesianGrids.jl.git"),
               PackageSpec(url="https://github.com/PenguinxCutCell/PenguinAnalysis.jl.git")]); Pkg.instantiate(); Pkg.test()'
+      
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: PenguinxCutCell/PenguinDiffusion.jl

@@ -4,7 +4,7 @@
 
 - [x] Run full unit test suite (`julia --project=. test/runtests.jl`).
 - [x] Smoke-run representative examples in `examples/1D`, `examples/2D`, and `examples/3D`.
-- [ ] Fix failing `examples/2D/Diffusion/Heat_2ph.jl` manufactured setup.
+- [x] Fix failing `examples/2D/Diffusion/Heat_2ph.jl` manufactured setup.
 - [x] Sync `examples/README.md` paths with actual file layout.
 
 ## Next technical work
