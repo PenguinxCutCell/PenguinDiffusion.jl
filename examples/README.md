@@ -17,7 +17,7 @@ julia --project=. examples/2D/Diffusion/Poisson_robin.jl
 
 Available examples:
 
-- `examples/steady_1d_diph_robinjump.jl`:
+- `examples/1D/Diffusion/steady_1d_diph_robinjump.jl`:
   1D steady diphasic Robin-jump + flux-continuity validation using
   `InterfaceConditions(scalar=RobinJump(...), flux=FluxJump(...))`,
   with analytical profile comparison, interface residual checks, and optional plot output.
@@ -51,5 +51,5 @@ Available examples:
   interface-flux assembly path.
 - `examples/2D/Diffusion/MovingHeat_2ph.jl`:
   2D diphasic moving-geometry manufactured transient heat case (uses `solve_unsteady_moving!`).
-- `examples/3D/Diffusion/Poisson_outside_sphere_embedded_dirichlet.jl`:
+- `examples/3D/Diffusion/Poisson_dirichlet.jl`:
   3D manufactured Poisson outside a sphere, embedded Dirichlet interface and analytical Dirichlet on the outer box.

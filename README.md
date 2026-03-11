@@ -9,6 +9,8 @@
 
 ## Feature Status
 
+Last validated on **2026-03-11** with `julia --project=. test/runtests.jl` and example smoke runs.
+
 | Area | Item | Status | Notes |
 |---|---|---|---|
 | Models | Monophasic steady | Implemented | `DiffusionModelMono` + `assemble_steady_mono!` |
@@ -35,6 +37,8 @@
 | Solver efficiency | Full identity regularization | Implemented | Most robust path in current code |
 | Solver efficiency | Active-DOF pruning | Partial | Works and can reduce allocations; not yet integrated as default solve path |
 | Solver efficiency | Schur elimination of interface unknowns | Partial | Promising in CPU for some cases, but currently allocation-heavy and not integrated |
+| Diagnostics | Interface exchange metrics | Implemented | `compute_interface_exchange_metrics` + unit tests + `examples/2D/Diffusion/Heat_2ph_disk_transfer_metrics.jl` |
+| Examples | 1D/2D/3D diffusion scripts | Implemented | Smoke-tested on 2026-03-11; paths listed in `examples/README.md` |
 
 ### Practical Solver Note
 
