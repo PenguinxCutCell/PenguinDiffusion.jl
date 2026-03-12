@@ -1,0 +1,31 @@
+[deps]
+CartesianGeometry = "5961ddb3-e46d-41f1-806c-0197ba873d0b"
+CartesianGrids = "c0ffee00-c0ff-e000-c0ff-ee000c0ffee0"
+CartesianOperators = "6ffd2c7a-1a34-4f8b-a2c9-3d5e7f9b0c1d"
+PenguinAnalysis = "8b9f1e76-5e6f-4b6f-a6b3-2e5b9f8d7a41"
+PenguinBCs = "9a5f4c72-2b90-4b4f-93d2-7b2c8e4d1f30"
+PenguinDiffusion = "c72b9f8e-3a44-4f12-a9d3-6e5b2c1f7a8b"
+PenguinSolverCore = "8f14e45f-7d0b-4a6b-9c1e-2f3d4b5a6c7d"
+Roots = "f2b01f46-fcfa-551c-844a-d8ac1e96c665"
+SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
+
+[sources]
+CartesianGeometry = {path = "../../CartesianGeometry.jl"}
+CartesianGrids = {path = "../../CartesianGrids.jl"}
+CartesianOperators = {path = "../../CartesianOperators.jl"}
+PenguinAnalysis = {path = "../../PenguinAnalysis.jl"}
+PenguinBCs = {path = "../../PenguinBCs.jl"}
+PenguinDiffusion = {path = ".."}
+PenguinSolverCore = {path = "../../PenguinSolverCore.jl"}
+
+[compat]
+CartesianGeometry = "0.1"
+CartesianGrids = "0.1"
+CartesianOperators = "0.1"
+PenguinAnalysis = "0.1"
+PenguinBCs = "0.1"
+PenguinDiffusion = "0.1"
+PenguinSolverCore = "0.1"
+Roots = "2.2.12"
+SpecialFunctions = "2.7.1"
+julia = "1"

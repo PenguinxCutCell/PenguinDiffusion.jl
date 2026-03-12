@@ -1,44 +1,136 @@
-**Numerical Algorithms & Routines**
+# Algorithms
 
-This page summarizes high-level algorithms implemented by the core routines.
+## Core Discrete Operators
 
-1) Assembly of steady mono-phase system (`assemble_steady_mono!`)
+From `ops = DiffusionOps(cap)`:
 
-- Inputs: `sys::LinearSystem`, `model::DiffusionModelMono`, time `t`.
-- Steps:
-  - Compute core operators: $K,C,J,L$ from `ops` via `K = G' * Winv * G`, etc.
-  - Sample diffusivity: $D_\omega$ at cell centroids (or callback) producing a diagonal `ID`.
-  - Sample source: build vector $f_\omega` by evaluating provided source callbacks.
-  - Build interface diagonals: compute `α,β,g_γ` from `bc_interface` over the interface mask.
-  - Construct block matrices $A_{11}, A_{12}, A_{21}, A_{22}$ as described in Theory.
-  - For canonical layouts (`ω,γ` stacked by blocks), assemble global `A` using sparse block concatenation.
-  - For non-canonical layouts, fall back to offset-based sparse insertion.
-  - Apply box boundary conditions with `apply_box_bc_mono!`.
-  - Enforce halo and inactive-cell identity rows so halo/inactive do not pollute solves.
+```math
+K = G^\top W^{-1} G,\quad
+C = G^\top W^{-1} H,\quad
+J = H^\top W^{-1} G,\quad
+L = H^\top W^{-1} H.
+```
 
-2) Assembly of unsteady mono-phase (`assemble_unsteady_mono!`)
+With coefficient weighting, assembly effectively uses weighted variants of these blocks.
 
-- Builds the steady system at time $t+\theta\Delta t$ (where `scheme` gives $\theta$),
-- Adds mass diagonal $M = V/\Delta t$ into the ω-ω block and the RHS $M u^n$.
+## Unknown Layouts
 
-3) Assembly for two-phase / diph systems (`assemble_steady_diph!` / `assemble_unsteady_diph!`)
+### Mono
 
-- Similar structure but with two ω/γ blocks (phase 1 and phase 2).
-- Each phase uses its own sampled $D_1, D_2$ and interface diagonal contributions `α1,α2,β1,β2`.
-- Box BCs are applied per-phase by temporarily constructing an `UnknownLayout` restricted to the ω-block for each phase.
+Unknown blocks are `ω` (cell values) and `γ` (interface traces):
 
-4) Solving
+```text
+x = [ uω
+      uγ ]
+```
 
-- `solve_steady!` helper constructs a `LinearSystem`, calls the appropriate assemble routine, then invokes `solve!` from `PenguinSolverCore` with the selected method (direct or iterative).
-- `solve_unsteady!` advances in time with `:BE` / `:CN` (or numeric `θ`) and supports a constant-operator fast path:
-  - if matrix and RHS coefficients are time-invariant, it assembles once and reuses the factorization across timesteps,
-  - if not, it falls back to per-step unsteady assembly.
+Canonical mono layout uses contiguous blocks of length `ntotal`.
 
-Performance / numerical notes
+### Diph
 
-- Canonical mono/diph systems use direct sparse block concatenation for lower assembly overhead.
-- Non-canonical custom layouts still use sparse offset insertion via `_insert_block!`.
-- Halo/inactive constraints are enforced through sparse masking (`M*A*M + P`) to avoid expensive row-by-row CSC edits.
-- Interface sampling is only active where `cap.buf.Γ` (interface measure) is finite and positive; the code computes a boolean mask for these locations.
+Unknown blocks are `ω1, γ1, ω2, γ2`:
 
-Reference to core symbols in the implementation: `K,C,J,L`, `G,H,Winv`, `cap.V`, `cap.Γ`, `apply_box_bc_mono!`, and the assembly helpers `_insert_block!`, `_insert_vec!`, `_set_row_identity!`.
+```text
+x = [ uω1
+      uγ1
+      uω2
+      uγ2 ]
+```
+
+Canonical diphasic layout uses four contiguous blocks of length `ntotal`.
+
+## Steady Mono Assembly
+
+At time `t`:
+
+```math
+\begin{bmatrix}
+A_{11} & A_{12}\\
+A_{21} & A_{22}
+\end{bmatrix}
+\begin{bmatrix}
+u_\omega\\
+u_\gamma
+\end{bmatrix}
+=
+\begin{bmatrix}
+b_\omega\\
+b_\gamma
+\end{bmatrix}
+```
+
+with
+
+```math
+A_{11}=K,\;
+A_{12}=C,\;
+A_{21}=\operatorname{diag}(\beta)J,\;
+A_{22}=\operatorname{diag}(\beta)L+\operatorname{diag}(\alpha)\Gamma,
+```
+
+```math
+b_\omega = V f_\omega,\quad b_\gamma = \Gamma g_\gamma.
+```
+
+## Unsteady Mono (`θ`)
+
+Fixed geometry:
+
+1. Assemble steady operator at `t + θΔt`.
+2. Scale previous-step contribution on `ω` rows by `(1-θ)`.
+3. Add mass diagonal `M = V/Δt` on `ω` rows.
+
+Moving geometry:
+
+- build slab (`V^n`, `V^{n+1}`, slab `cap/ops`),
+- use `Ψ+`, `Ψ-` weights for birth/death handling,
+- sample diffusivity-weighted operator blocks at `t^n + θΔt`,
+- sample/interface data at slab `C_γ`,
+- for `θ<1`, blend interface/source data between `t^n` and `t^{n+1}`.
+
+## Steady Diph Assembly
+
+Two per-phase diffusion rows plus two interface rows:
+
+```text
+[ ω1-row ]  diffusion phase 1
+[ γ1-row ]  scalar-like interface relation
+[ ω2-row ]  diffusion phase 2
+[ γ2-row ]  flux-like interface relation
+```
+
+Supported interface combinations:
+
+- scalar row: `ScalarJump` or `RobinJump`,
+- flux row: `FluxJump` or `RobinJump`,
+- either row can be omitted (`nothing`), defaulting to identity regularization on that block.
+
+## Unsteady Diph (`θ`)
+
+Fixed geometry follows the same pattern as mono, applied to both `ω1` and `ω2`.
+
+Moving diphasic:
+
+- slab geometry and per-phase volumes are rebuilt every step,
+- `Ψ` weights control active/inactive transitions,
+- source data are `θ`-blended in time,
+- scalar and flux interface coefficients/data are `θ`-blended in time on slab `C_γ`.
+
+## Inactive/Halo Regularization
+
+Inactive or halo rows are transformed to identity constraints:
+
+- keeps systems non-singular in cut/dead-cell situations,
+- stabilizes moving-interface steps with fresh/dead cells,
+- avoids removing rows/cols and preserves consistent layouts.
+
+## Constant-Operator Reuse in `solve_unsteady!`
+
+For fixed-geometry models:
+
+- detect matrix and RHS time dependence from callbacks,
+- if both are time-invariant and `dt` is unchanged:
+  assemble once, reuse factorization, update RHS only,
+- otherwise assemble every step.
+
+Moving models currently rebuild each step (no constant-operator reuse).

@@ -18,6 +18,11 @@ export assemble_unsteady_mono_moving!, assemble_unsteady_diph_moving!
 export solve_steady!, solve_unsteady!, solve_unsteady_moving!
 export compute_interface_exchange_metrics
 
+"""
+    DiffusionModelMono
+
+Monophasic diffusion model on a fixed cut-cell capacity/operator pair.
+"""
 struct DiffusionModelMono{N,T,DT,ST,IT}
     ops::DiffusionOps{N,T}
     cap::AssembledCapacity{N,T}
@@ -29,6 +34,16 @@ struct DiffusionModelMono{N,T,DT,ST,IT}
     coeff_mode::Symbol
 end
 
+"""
+    DiffusionModelMono(cap, ops, D; source, bc_border, bc_interface, layout, coeff_mode)
+
+Build a fixed-geometry monophasic diffusion model.
+
+- `D` accepts a constant or callback supported by `eval_coeff`.
+- `source` accepts a constant or callback `(x...)` / `(x..., t)`.
+- `bc_interface` uses `PenguinBCs.Robin(α, β, g)` and is sampled at `C_γ`.
+- `coeff_mode` accepts `:harmonic`, `:arithmetic`, `:face`, or `:cell`.
+"""
 function DiffusionModelMono(
     cap::AssembledCapacity{N,T},
     ops::DiffusionOps{N,T},
@@ -45,6 +60,11 @@ function DiffusionModelMono(
     )
 end
 
+"""
+    MovingDiffusionModelMono
+
+Monophasic moving-geometry diffusion model assembled from space-time slabs.
+"""
 mutable struct MovingDiffusionModelMono{N,T,DT,ST,IT,BT}
     grid::CartesianGrid{N,T}
     body::BT
@@ -61,6 +81,11 @@ mutable struct MovingDiffusionModelMono{N,T,DT,ST,IT,BT}
     Vn1::Vector{T}
 end
 
+"""
+    MovingDiffusionModelDiph
+
+Diphasic moving-geometry diffusion model assembled from space-time slabs.
+"""
 mutable struct MovingDiffusionModelDiph{N,T,D1T,D2T,S1T,S2T,IT,B1T,B2T}
     grid::CartesianGrid{N,T}
     body1::B1T
@@ -84,6 +109,14 @@ mutable struct MovingDiffusionModelDiph{N,T,D1T,D2T,S1T,S2T,IT,B1T,B2T}
     V2n1::Vector{T}
 end
 
+"""
+    MovingDiffusionModelMono(grid, body, D; source, bc_border, bc_interface, layout, coeff_mode, geom_method)
+
+Build a moving monophasic model.
+
+- `body` is a level-set callback accepting `(x...)` or `(x..., t)`.
+- Per-step slab caches (`cap_slab`, `ops_slab`, `Vn`, `Vn1`) are updated by moving assembly.
+"""
 function MovingDiffusionModelMono(
     grid::CartesianGrid{N,T},
     body,
@@ -116,6 +149,15 @@ function MovingDiffusionModelMono(
     )
 end
 
+"""
+    MovingDiffusionModelDiph(grid, body1, D1, D2; source, body2, bc_border, ic, bc_interface, layout, coeff_mode, geom_method)
+
+Build a moving diphasic model.
+
+- If `body2` is omitted, phase 2 uses `-body1`.
+- `source` may be a tuple `(s1, s2)` or a single callback returning `(s1, s2)`.
+- Interface conditions use `InterfaceConditions` sampled at slab `C_γ`.
+"""
 function MovingDiffusionModelDiph(
     grid::CartesianGrid{N,T},
     body1,
@@ -179,6 +221,11 @@ function MovingDiffusionModelDiph(
     )
 end
 
+"""
+    DiffusionModelDiph
+
+Diphasic diffusion model on fixed cut-cell capacities/operators.
+"""
 struct DiffusionModelDiph{N,T,D1T,D2T,S1T,S2T,IT}
     ops1::DiffusionOps{N,T}
     cap1::AssembledCapacity{N,T}
@@ -194,6 +241,11 @@ struct DiffusionModelDiph{N,T,D1T,D2T,S1T,S2T,IT}
     coeff_mode::Symbol
 end
 
+"""
+    DiffusionModelDiph(cap1, ops1, D1, source1, cap2, ops2, D2, source2; bc_border, ic, bc_interface, layout, coeff_mode)
+
+Build a fixed-geometry diphasic diffusion model with per-phase capacities and operators.
+"""
 function DiffusionModelDiph(
     cap1::AssembledCapacity{N,T},
     ops1::DiffusionOps{N,T},
@@ -221,6 +273,11 @@ function DiffusionModelDiph(
     )
 end
 
+"""
+    DiffusionModelDiph(cap, ops, D1, D2; source, bc_border, ic, bc_interface, layout, coeff_mode)
+
+Convenience constructor using one shared capacity/operator pair for both phases.
+"""
 function DiffusionModelDiph(
     cap::AssembledCapacity{N,T},
     ops::DiffusionOps{N,T},
@@ -376,25 +433,17 @@ function _face_coeff_values(
     return vals
 end
 
-psip_cn(Vn, Vn1) = (iszero(Vn) && iszero(Vn1)) ? 0.0 : 0.5
-psim_cn(Vn, Vn1) = (iszero(Vn) && iszero(Vn1)) ? 0.0 : 0.5
-psip_be(Vn, Vn1) = (iszero(Vn) && iszero(Vn1)) ? 0.0 : 1.0
-psim_be(Vn, Vn1) = 0.0
+function _psi_functions(::Type{T}, θ::T) where {T}
+    (zero(T) <= θ <= one(T)) || throw(ArgumentError("numeric θ must satisfy 0 ≤ θ ≤ 1"))
+    psip = (Vn, Vn1) -> (iszero(Vn) && iszero(Vn1) ? zero(T) : θ)
+    psim = (Vn, Vn1) -> (iszero(Vn) && iszero(Vn1) ? zero(T) : (one(T) - θ))
+    return psip, psim
+end
 
-function _psi_functions(scheme)
-    if scheme isa Symbol
-        if scheme === :CN
-            return psip_cn, psim_cn
-        elseif scheme === :BE
-            return psip_be, psim_be
-        end
-    elseif scheme isa Real
-        θ = Float64(scheme)
-        psip = (Vn, Vn1) -> (iszero(Vn) && iszero(Vn1) ? 0.0 : θ)
-        psim = (Vn, Vn1) -> (iszero(Vn) && iszero(Vn1) ? 0.0 : (1.0 - θ))
-        return psip, psim
-    end
-    throw(ArgumentError("moving scheme must be :BE, :CN, or numeric θ"))
+function _scheme_theta_psi(::Type{T}, scheme) where {T}
+    θ = _theta_from_scheme(T, scheme)
+    psip, psim = _psi_functions(T, θ)
+    return θ, psip, psim
 end
 
 function _eval_levelset_time(body, x::SVector{N,T}, t::T) where {N,T}
@@ -586,6 +635,24 @@ function _interface_diagonals_mono(cap::AssembledCapacity{N,T}, ic::Union{Nothin
     return α, β, g
 end
 
+function _interface_diagonals_mono_theta(
+    cap::AssembledCapacity{N,T},
+    ic::Union{Nothing,PenguinBCs.Robin},
+    t::T,
+    dt::T,
+    θ::T,
+) where {N,T}
+    θ == one(T) && return _interface_diagonals_mono(cap, ic, t + dt)
+
+    αn, βn, gn = _interface_diagonals_mono(cap, ic, t)
+    αn1, βn1, gn1 = _interface_diagonals_mono(cap, ic, t + dt)
+    w0 = one(T) - θ
+    α = θ .* αn1 .+ w0 .* αn
+    β = θ .* βn1 .+ w0 .* βn
+    g = θ .* gn1 .+ w0 .* gn
+    return α, β, g
+end
+
 function _interface_coupling_diph(
     cap1::AssembledCapacity{N,T},
     cap2::AssembledCapacity{N,T},
@@ -652,6 +719,22 @@ function _interface_coupling_diph(
         end
     end
     return αs1, αs2, βs1, βs2, gs, αf1, αf2, βf1, βf2, gf
+end
+
+function _interface_coupling_diph_theta(
+    cap1::AssembledCapacity{N,T},
+    cap2::AssembledCapacity{N,T},
+    ic::Union{Nothing,InterfaceConditions},
+    t::T,
+    dt::T,
+    θ::T,
+) where {N,T}
+    θ == one(T) && return _interface_coupling_diph(cap1, cap2, ic, t + dt)
+
+    c_n = _interface_coupling_diph(cap1, cap2, ic, t)
+    c_n1 = _interface_coupling_diph(cap1, cap2, ic, t + dt)
+    w0 = one(T) - θ
+    return ntuple(k -> θ .* c_n1[k] .+ w0 .* c_n[k], length(c_n))
 end
 
 function _insert_block!(A::SparseMatrixCSC{T,Int}, rows::UnitRange{Int}, cols::UnitRange{Int}, B::SparseMatrixCSC{T,Int}) where {T}
@@ -1007,6 +1090,13 @@ function _is_canonical_diph_layout(lay, nt::Int)
            lay.γ2 == ((3 * nt + 1):(4 * nt))
 end
 
+"""
+    assemble_steady_mono!(sys, model, t)
+
+Assemble the steady monophasic linear system at time `t`.
+
+The interface condition is sampled at `C_γ`.
+"""
 function assemble_steady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono{N,T}, t::T) where {N,T}
     nt = model.cap.ntotal
     lay = model.layout.offsets
@@ -1057,6 +1147,12 @@ function assemble_steady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono{N
     return sys
 end
 
+"""
+    assemble_unsteady_mono!(sys, model, uⁿ, t, dt, scheme)
+
+Assemble the fixed-geometry unsteady monophasic θ-system for one step
+`[t, t+dt]`.
+"""
 function assemble_unsteady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono{N,T}, uⁿ, t::T, dt::T, scheme) where {N,T}
     θ = _theta_from_scheme(T, scheme)
     assemble_steady_mono!(sys, model, t + θ * dt)
@@ -1095,6 +1191,15 @@ function assemble_unsteady_mono!(sys::LinearSystem{T}, model::DiffusionModelMono
     return sys
 end
 
+"""
+    assemble_unsteady_mono_moving!(sys, model, uⁿ, t, dt; scheme=:CN)
+
+Assemble the moving-geometry monophasic θ-system for one slab step
+`[t, t+dt]`.
+
+Interface/source data are blended in time with `θ` for `θ < 1` and sampled
+at `t+dt` for `:BE`. Interface spatial sampling remains at slab `C_γ`.
+"""
 function assemble_unsteady_mono_moving!(
     sys::LinearSystem{T},
     model::MovingDiffusionModelMono{N,T},
@@ -1104,8 +1209,7 @@ function assemble_unsteady_mono_moving!(
     scheme=:CN,
 ) where {N,T}
     dt > zero(T) || throw(ArgumentError("dt must be positive"))
-    θ = _theta_from_scheme(T, scheme)
-    psip, psim = _psi_functions(scheme)
+    θ, psip, psim = _scheme_theta_psi(T, scheme)
 
     _build_moving_slab!(model, t, dt)
     cap = something(model.cap_slab)
@@ -1130,9 +1234,12 @@ function assemble_unsteady_mono_moving!(
         v
     end
 
+    # Diffusivity-weighted operators are sampled at t + θ*dt, matching the
+    # fixed-geometry θ-assembly convention.
     K, C, J, L = _weighted_core_ops(cap, ops, model.D, t + θ * dt, model.coeff_mode)
-    α, β, gγ_n1 = _interface_diagonals_mono(cap, model.bc_interface, t + dt)
-    _, _, gγ_n = _interface_diagonals_mono(cap, model.bc_interface, t)
+    # Interface coefficients/data remain sampled on the slab C_γ points and are
+    # blended in time according to θ (BE=end-state, CN midpoint blend).
+    α, β, gγ = _interface_diagonals_mono_theta(cap, model.bc_interface, t, dt, θ)
     fω_n = _source_values_mono(cap, model.source, t)
     fω_n1 = _source_values_mono(cap, model.source, t + dt)
 
@@ -1161,7 +1268,7 @@ function assemble_unsteady_mono_moving!(
     bω = (M0 - K * Ψm) * uω
     bω .-= (C * Ψm) * uγ
     bω .+= θ .* (cap.V * fω_n1) .+ (one(T) - θ) .* (cap.V * fω_n)
-    bγ = θ .* Iγ * gγ_n1 .+ (one(T) - θ) .* Iγ * gγ_n
+    bγ = Iγ * gγ
 
     A, b = if _is_canonical_mono_layout(lay, nt)
         ([A11 A12; A21 A22], vcat(bω, bγ))
@@ -1188,6 +1295,15 @@ function assemble_unsteady_mono_moving!(
     return sys
 end
 
+"""
+    assemble_unsteady_diph_moving!(sys, model, uⁿ, t, dt; scheme=:CN)
+
+Assemble the moving-geometry diphasic θ-system for one slab step
+`[t, t+dt]`.
+
+Scalar/flux interface data are blended in time with `θ` for `θ < 1` and
+sampled at `t+dt` for `:BE`, while spatial sampling remains at slab `C_γ`.
+"""
 function assemble_unsteady_diph_moving!(
     sys::LinearSystem{T},
     model::MovingDiffusionModelDiph{N,T},
@@ -1197,8 +1313,7 @@ function assemble_unsteady_diph_moving!(
     scheme=:CN,
 ) where {N,T}
     dt > zero(T) || throw(ArgumentError("dt must be positive"))
-    θ = _theta_from_scheme(T, scheme)
-    psip, psim = _psi_functions(scheme)
+    θ, psip, psim = _scheme_theta_psi(T, scheme)
 
     _build_moving_slab!(model, t, dt)
     cap1 = something(model.cap1_slab)
@@ -1221,11 +1336,16 @@ function assemble_unsteady_diph_moving!(
         throw(DimensionMismatch("uⁿ length must be $(2 * nt) (ω1+ω2) or $nsys (full system)"))
     end
 
+    # Diffusivity-weighted operators are sampled at t + θ*dt, matching the
+    # fixed-geometry θ-assembly convention.
     K1, C1, J1, L1 = _weighted_core_ops(cap1, ops1, model.D1, t + θ * dt, model.coeff_mode)
     K2, C2, J2, L2 = _weighted_core_ops(cap2, ops2, model.D2, t + θ * dt, model.coeff_mode)
     f1_n, f2_n = _source_values_diph(cap1, model.source1, cap2, model.source2, t)
     f1_n1, f2_n1 = _source_values_diph(cap1, model.source1, cap2, model.source2, t + dt)
-    αs1, αs2, βs1, βs2, gs, αf1, αf2, βf1, βf2, gf = _interface_coupling_diph(cap1, cap2, model.ic, t + dt)
+    # Interface coefficients/data are sampled at slab C_γ and blended in time
+    # according to θ to avoid end-time-only treatment for CN/generic θ.
+    αs1, αs2, βs1, βs2, gs, αf1, αf2, βf1, βf2, gf =
+        _interface_coupling_diph_theta(cap1, cap2, model.ic, t, dt, θ)
 
     M1n = spdiagm(0 => model.V1n)
     M1n1 = spdiagm(0 => model.V1n1)
@@ -1342,6 +1462,13 @@ function assemble_unsteady_diph_moving!(
     return sys
 end
 
+"""
+    assemble_steady_diph!(sys, model, t)
+
+Assemble the steady diphasic linear system at time `t`.
+
+Interface scalar/flux rows are sampled at `C_γ`.
+"""
 function assemble_steady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N,T}, t::T) where {N,T}
     nt = model.cap1.ntotal
     lay = model.layout.offsets
@@ -1440,6 +1567,12 @@ function assemble_steady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N
     return sys
 end
 
+"""
+    assemble_unsteady_diph!(sys, model, uⁿ, t, dt, scheme)
+
+Assemble the fixed-geometry unsteady diphasic θ-system for one step
+`[t, t+dt]`.
+"""
 function assemble_unsteady_diph!(sys::LinearSystem{T}, model::DiffusionModelDiph{N,T}, uⁿ, t::T, dt::T, scheme) where {N,T}
     θ = _theta_from_scheme(T, scheme)
     assemble_steady_diph!(sys, model, t + θ * dt)
@@ -1497,6 +1630,13 @@ function PenguinSolverCore.assemble!(sys::LinearSystem{T}, model::DiffusionModel
     assemble_steady_diph!(sys, model, convert(T, t))
 end
 
+"""
+    solve_steady!(model; t=0, method=:direct, kwargs...)
+
+Assemble and solve a steady diffusion system.
+
+Returns the solved `LinearSystem`.
+"""
 function solve_steady!(model::DiffusionModelMono{N,T}; t::T=zero(T), method::Symbol=:direct, kwargs...) where {N,T}
     n = maximum((last(model.layout.offsets.ω), last(model.layout.offsets.γ)))
     sys = LinearSystem(spzeros(T, n, n), zeros(T, n))
@@ -1523,7 +1663,9 @@ function _theta_from_scheme(::Type{T}, scheme) where {T}
         end
         throw(ArgumentError("unknown scheme `$scheme`; expected :BE or :CN"))
     elseif scheme isa Real
-        return convert(T, scheme)
+        θ = convert(T, scheme)
+        (zero(T) <= θ <= one(T)) || throw(ArgumentError("numeric θ must satisfy 0 ≤ θ ≤ 1"))
+        return θ
     end
     throw(ArgumentError("scheme must be a Symbol (:BE/:CN) or a numeric theta"))
 end
@@ -1642,6 +1784,10 @@ function _init_unsteady_state_mono(model::DiffusionModelMono{N,T}, u0) where {N,
         u .= Vector{T}(u0)
     elseif length(u0) == nt
         u[lay.ω] .= Vector{T}(u0)
+        # Reduced initial states provide only cell unknowns. Seed interface
+        # traces from the corresponding cell block so θ<1 paths have a
+        # consistent previous-step γ state.
+        u[lay.γ] .= u[lay.ω]
     else
         throw(DimensionMismatch("u0 length must be $nt (ω block) or $nsys (full system)"))
     end
@@ -1657,6 +1803,10 @@ function _init_unsteady_state_moving(model::MovingDiffusionModelMono{N,T}, u0) w
         u .= Vector{T}(u0)
     elseif length(u0) == nt
         u[lay.ω] .= Vector{T}(u0)
+        # Reduced initial states provide only cell unknowns. Seed interface
+        # traces from the corresponding cell block so θ<1 paths have a
+        # consistent previous-step γ state.
+        u[lay.γ] .= u[lay.ω]
     else
         throw(DimensionMismatch("u0 length must be $nt (ω block) or $nsys (full system)"))
     end
@@ -1674,6 +1824,11 @@ function _init_unsteady_state_moving(model::MovingDiffusionModelDiph{N,T}, u0) w
         u0v = Vector{T}(u0)
         u[lay.ω1] .= u0v[1:nt]
         u[lay.ω2] .= u0v[(nt + 1):(2 * nt)]
+        # Reduced initial states provide only cell unknowns. Seed both
+        # interface blocks from phase cell blocks so θ<1 paths have a
+        # consistent previous-step γ state.
+        u[lay.γ1] .= u[lay.ω1]
+        u[lay.γ2] .= u[lay.ω2]
     else
         throw(DimensionMismatch("u0 length must be $(2 * nt) (ω1+ω2) or $nsys (full system)"))
     end
@@ -1691,6 +1846,11 @@ function _init_unsteady_state_diph(model::DiffusionModelDiph{N,T}, u0) where {N,
         u0v = Vector{T}(u0)
         u[lay.ω1] .= u0v[1:nt]
         u[lay.ω2] .= u0v[(nt + 1):(2 * nt)]
+        # Reduced initial states provide only cell unknowns. Seed both
+        # interface blocks from phase cell blocks so θ<1 paths have a
+        # consistent previous-step γ state.
+        u[lay.γ1] .= u[lay.ω1]
+        u[lay.γ2] .= u[lay.ω2]
     else
         throw(DimensionMismatch("u0 length must be $(2 * nt) (ω1+ω2) or $nsys (full system)"))
     end
@@ -1773,6 +1933,14 @@ function _set_constant_rhs_diph!(
     return b
 end
 
+"""
+    solve_unsteady_moving!(model, u0, tspan; dt, scheme=:CN, method=:direct, save_history=true, kwargs...)
+
+Advance a moving-geometry model in time.
+
+Accepted `scheme` values are `:BE`, `:CN`, or numeric `θ` with `0 ≤ θ ≤ 1`.
+Returns `(times, states, system, reused_constant_operator=false)`.
+"""
 function solve_unsteady_moving!(
     model::MovingDiffusionModelMono{N,T},
     u0,
@@ -1859,6 +2027,14 @@ function solve_unsteady_moving!(
     return (times=times, states=states, system=sys, reused_constant_operator=false)
 end
 
+"""
+    solve_unsteady!(model, u0, tspan; dt, scheme=:BE, method=:direct, save_history=true, kwargs...)
+
+Advance a fixed-geometry model in time.
+
+Accepted `scheme` values are `:BE`, `:CN`, or numeric `θ` with `0 ≤ θ ≤ 1`.
+Returns `(times, states, system, reused_constant_operator)`.
+"""
 function solve_unsteady!(
     model::DiffusionModelMono{N,T},
     u0,

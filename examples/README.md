@@ -12,8 +12,15 @@ Each example includes:
 Run an example from the repository root with:
 
 ```bash
-julia --project=. examples/2D/Diffusion/Poisson_robin.jl
+julia --project=examples -e 'using Pkg; Pkg.instantiate()'
+julia --project=examples examples/2D/Diffusion/Poisson_robin.jl
 ```
+
+Environment notes:
+
+- The package runtime dependencies are declared in the root `Project.toml`.
+- Example-only dependencies (`PenguinAnalysis`, `Roots`, `SpecialFunctions`) are declared in `examples/Project.toml`.
+- If you prefer the root environment, add those example-only packages locally before running the corresponding scripts.
 
 Available examples:
 

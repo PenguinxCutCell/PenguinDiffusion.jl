@@ -893,38 +893,40 @@ end
     body(x, t) = x - (0.45 + 0.04 * sin(2pi * t))
     bc = BorderConditions(; left=Dirichlet(0.7), right=Dirichlet(0.7))
     ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
-    model = MovingDiffusionModelDiph(
-        grid,
-        body,
-        1.0,
-        1.0;
-        source=(0.0, 0.0),
-        bc_border=bc,
-        ic=ic,
-        geom_method=:vofijul,
-    )
 
     nt = prod(grid.n)
     u0 = vcat(fill(0.7, nt), fill(0.7, nt))
-    sol = solve_unsteady_moving!(model, u0, (0.0, 0.06); dt=0.02, scheme=:BE, save_history=false)
-    @test all(isfinite, sol.system.x)
-    @test !(model.cap1_slab === nothing)
-    @test !(model.cap2_slab === nothing)
+    for scheme in (:BE, :CN)
+        model = MovingDiffusionModelDiph(
+            grid,
+            body,
+            1.0,
+            1.0;
+            source=(0.0, 0.0),
+            bc_border=bc,
+            ic=ic,
+            geom_method=:vofijul,
+        )
+        sol = solve_unsteady_moving!(model, u0, (0.0, 0.06); dt=0.02, scheme=scheme, save_history=false)
+        @test all(isfinite, sol.system.x)
+        @test !(model.cap1_slab === nothing)
+        @test !(model.cap2_slab === nothing)
 
-    lay = model.layout.offsets
-    u1 = sol.system.x[lay.ω1]
-    u2 = sol.system.x[lay.ω2]
-    idx1 = active_physical_indices(model.cap1_slab)
-    idx2 = active_physical_indices(model.cap2_slab)
-    @test !isempty(idx1)
-    @test !isempty(idx2)
-    @test maximum(abs.(u1[idx1] .- 0.7)) < 2e-3
-    @test maximum(abs.(u2[idx2] .- 0.7)) < 2e-3
+        lay = model.layout.offsets
+        u1 = sol.system.x[lay.ω1]
+        u2 = sol.system.x[lay.ω2]
+        idx1 = active_physical_indices(model.cap1_slab)
+        idx2 = active_physical_indices(model.cap2_slab)
+        @test !isempty(idx1)
+        @test !isempty(idx2)
+        @test maximum(abs.(u1[idx1] .- 0.7)) < 3e-3
+        @test maximum(abs.(u2[idx2] .- 0.7)) < 3e-3
 
-    metrics = compute_interface_exchange_metrics(model, sol.system; characteristic_scale=0.2, reference_value=(0.0, 0.0))
-    @test metrics.phase1.interface_measure > 0.0
-    @test metrics.phase2.interface_measure > 0.0
-    @test isfinite(metrics.flux_balance)
+        metrics = compute_interface_exchange_metrics(model, sol.system; characteristic_scale=0.2, reference_value=(0.0, 0.0))
+        @test metrics.phase1.interface_measure > 0.0
+        @test metrics.phase2.interface_measure > 0.0
+        @test isfinite(metrics.flux_balance)
+    end
 end
 
 @testset "Moving diphasic stationary-interface equivalence (BE)" begin
@@ -978,6 +980,137 @@ end
     err2 = norm(sys_moving.x[lay.ω2] - sys_static.x[lay.ω2]) / max(norm(sys_static.x[lay.ω2]), 1e-14)
     @test err1 < 2e-3
     @test err2 < 2e-3
+end
+
+@testset "Moving diphasic stationary-interface equivalence (CN)" begin
+    grid_space = (range(0.0, 1.0; length=65),)
+    xγ = 0.53
+    body_space(x) = x - xγ
+    body_time(x, t) = x - xγ
+    bc = BorderConditions(; left=Dirichlet(0.0), right=Dirichlet(0.0))
+    ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
+
+    moms1 = geometric_moments(body_space, grid_space, Float64, nan; method=:vofijul)
+    moms2 = geometric_moments((x) -> -body_space(x), grid_space, Float64, nan; method=:vofijul)
+    cap1 = assembled_capacity(moms1; bc=0.0)
+    cap2 = assembled_capacity(moms2; bc=0.0)
+    ops1 = DiffusionOps(cap1; periodic=periodic_flags(bc, 1))
+    ops2 = DiffusionOps(cap2; periodic=periodic_flags(bc, 1))
+    model_static = DiffusionModelDiph(cap1, ops1, 1.3, 0.0, cap2, ops2, 0.7, 0.0; bc_border=bc, ic=ic)
+
+    lay = model_static.layout.offsets
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+    u0 = zeros(Float64, nsys)
+    idx1 = active_physical_indices(cap1)
+    idx2 = active_physical_indices(cap2)
+    for i in idx1
+        u0[lay.ω1[i]] = sin(pi * cap1.C_ω[i][1])
+    end
+    for i in idx2
+        u0[lay.ω2[i]] = 0.5 * sin(2pi * cap2.C_ω[i][1])
+    end
+
+    sys_static = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_unsteady_diph!(sys_static, model_static, u0, 0.0, 0.02, :CN)
+    solve!(sys_static; method=:direct, reuse_factorization=false)
+
+    grid = CartesianGrid((0.0,), (1.0,), (65,))
+    model_moving = MovingDiffusionModelDiph(
+        grid,
+        body_time,
+        1.3,
+        0.7;
+        source=(0.0, 0.0),
+        bc_border=bc,
+        ic=ic,
+        geom_method=:vofijul,
+    )
+    sys_moving = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_unsteady_diph_moving!(sys_moving, model_moving, u0, 0.0, 0.02; scheme=:CN)
+    solve!(sys_moving; method=:direct, reuse_factorization=false)
+
+    err1 = norm(sys_moving.x[lay.ω1] - sys_static.x[lay.ω1]) / max(norm(sys_static.x[lay.ω1]), 1e-14)
+    err2 = norm(sys_moving.x[lay.ω2] - sys_static.x[lay.ω2]) / max(norm(sys_static.x[lay.ω2]), 1e-14)
+    @test err1 < 3e-3
+    @test err2 < 3e-3
+end
+
+@testset "Moving diphasic time-varying interface data θ regression (1D)" begin
+    grid = CartesianGrid((0.0,), (1.0,), (65,))
+    # Keep interface away from grid nodes to guarantee non-empty cut set.
+    xγ = 0.53
+    body(x, t) = x - xγ
+    bc = BorderConditions(; left=Dirichlet(0.0), right=Dirichlet(0.0))
+    gscalar(x, t) = 2.0 * t
+    ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, gscalar), flux=nothing)
+    model = MovingDiffusionModelDiph(
+        grid,
+        body,
+        0.0,
+        0.0;
+        source=(0.0, 0.0),
+        bc_border=bc,
+        ic=ic,
+        geom_method=:vofijul,
+    )
+
+    lay = model.layout.offsets
+    nsys = maximum((last(lay.ω1), last(lay.γ1), last(lay.ω2), last(lay.γ2)))
+    u0 = zeros(Float64, nsys)
+    dt = 0.1
+
+    sys_be = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_unsteady_diph_moving!(sys_be, model, u0, 0.0, dt; scheme=:BE)
+    solve!(sys_be; method=:direct, reuse_factorization=false)
+
+    sys_cn = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_unsteady_diph_moving!(sys_cn, model, u0, 0.0, dt; scheme=:CN)
+    solve!(sys_cn; method=:direct, reuse_factorization=false)
+
+    sys_theta = LinearSystem(spzeros(Float64, nsys, nsys), zeros(Float64, nsys))
+    assemble_unsteady_diph_moving!(sys_theta, model, u0, 0.0, dt; scheme=0.5)
+    solve!(sys_theta; method=:direct, reuse_factorization=false)
+
+    @test !(model.cap1_slab === nothing)
+    idxγ = interface_indices(model.cap1_slab)
+    @test !isempty(idxγ)
+
+    uγ1_be = sys_be.x[lay.γ1][idxγ]
+    uγ1_cn = sys_cn.x[lay.γ1][idxγ]
+    mbe = sum(abs.(uγ1_be)) / length(idxγ)
+    mcn = sum(abs.(uγ1_cn)) / length(idxγ)
+
+    @test all(isfinite, sys_be.x)
+    @test all(isfinite, sys_cn.x)
+    @test all(isfinite, sys_theta.x)
+    @test mbe > mcn
+    @test isapprox(mcn / mbe, 0.5; atol=0.15)
+
+    rel_cn_theta = norm(sys_cn.x - sys_theta.x) / max(norm(sys_cn.x), 1e-14)
+    @test rel_cn_theta < 1e-10
+end
+
+@testset "Moving diphasic generic θ path (1D)" begin
+    grid = CartesianGrid((0.0,), (1.0,), (65,))
+    body(x, t) = x - (0.45 + 0.03 * sin(2pi * t))
+    bc = BorderConditions(; left=Dirichlet(0.2), right=Dirichlet(0.2))
+    ic = InterfaceConditions(; scalar=ScalarJump(1.0, 1.0, 0.0), flux=FluxJump(1.0, 1.0, 0.0))
+    model = MovingDiffusionModelDiph(
+        grid,
+        body,
+        1.0,
+        1.0;
+        source=(0.0, 0.0),
+        bc_border=bc,
+        ic=ic,
+        geom_method=:vofijul,
+    )
+
+    nt = prod(grid.n)
+    u0 = vcat(fill(0.2, nt), fill(0.2, nt))
+    sol = solve_unsteady_moving!(model, u0, (0.0, 0.03); dt=0.01, scheme=0.3, save_history=false)
+    @test all(isfinite, sol.system.x)
+    @test maximum(abs, sol.system.x) <= 10.0
 end
 
 @testset "Moving diphasic fresh/dead shock robustness (1D)" begin

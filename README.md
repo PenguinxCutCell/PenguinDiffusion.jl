@@ -7,6 +7,43 @@
 
 `PenguinDiffusion.jl` is a cut-cell diffusion package built on `CartesianGeometry.jl`, `CartesianOperators.jl`, and `PenguinSolverCore.jl`.
 
+## Documentation
+
+- [Home](https://PenguinxCutCell.github.io/PenguinDiffusion.jl/dev/)
+- [Theory / models](https://PenguinxCutCell.github.io/PenguinDiffusion.jl/dev/diffusion/)
+- [Algorithms](https://PenguinxCutCell.github.io/PenguinDiffusion.jl/dev/algorithms/)
+- [API reference](https://PenguinxCutCell.github.io/PenguinDiffusion.jl/dev/api/)
+- [Examples guide](https://PenguinxCutCell.github.io/PenguinDiffusion.jl/dev/examples/)
+
+## Quick Start
+
+```julia
+using CartesianGeometry: geometric_moments, nan
+using CartesianOperators
+using PenguinBCs
+using PenguinDiffusion
+
+grid = (range(0.0, 1.0; length=65),)
+moms = geometric_moments((x) -> -1.0, grid, Float64, nan; method=:vofijul)
+cap = assembled_capacity(moms; bc=0.0)
+bc = BorderConditions(; left=Dirichlet(0.0), right=Dirichlet(0.0))
+ops = DiffusionOps(cap; periodic=periodic_flags(bc, 1))
+model = DiffusionModelMono(cap, ops, 1.0; source=0.0, bc_border=bc)
+sol = solve_steady!(model)
+```
+
+## Time Schemes
+
+- Stationary geometry unsteady solves: `scheme=:BE`, `scheme=:CN`, or numeric `θ` with `0 ≤ θ ≤ 1`.
+- Moving geometry unsteady solves: same accepted scheme values.
+- `:BE` means `θ=1`; `:CN` means `θ=1/2`.
+
+## Dependency / Environment Notes
+
+- Root runtime dependencies are in `Project.toml`.
+- Docs environment is in `docs/Project.toml`.
+- Examples environment is in `examples/Project.toml` and includes example-only dependencies (`PenguinAnalysis`, `Roots`, `SpecialFunctions`).
+
 ## Feature Status
 
 Last validated on **2026-03-11** with `julia --project=. test/runtests.jl` and example smoke runs.

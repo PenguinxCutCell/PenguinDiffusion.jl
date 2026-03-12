@@ -1,95 +1,83 @@
-**Examples**
+# Examples
 
-The repository includes standalone example scripts under `examples/` with analytical references and volume-weighted error checks.
-
-Run from repository root:
+Instantiate the examples environment:
 
 ```bash
-julia --project=. examples/2D/Diffusion/Poisson_robin.jl
+julia --project=examples -e 'using Pkg; Pkg.instantiate()'
 ```
 
-Available diffusion examples
+Run a script:
 
-- `examples/steady_1d_diph_robinjump.jl`
-  - 1D steady diphasic Robin-jump plus flux-continuity benchmark.
-  - Interface conditions:
-    - scalar row: `RobinJump(α, β, gγ)`
-    - flux row: `FluxJump(1, 1, 0)`
-  - Analytical reference: piecewise linear profile with interface jump from Robin relation.
-  - Reports bulk `L2` errors and interface residuals; optional CairoMakie plot.
+```bash
+julia --project=examples examples/2D/Diffusion/Poisson_robin.jl
+```
 
-- `examples/2D/Diffusion/Poisson_robin.jl`
-  - 2D steady Poisson inside a disk.
-  - Embedded interface condition: `Robin(alpha, beta, g)`.
-  - Analytical reference: radial quadratic profile.
-  - Check: volume-weighted `L2` error over active physical cells.
-
-- `examples/2D/Diffusion/Heat_robin.jl`
-  - 2D unsteady heat diffusion inside a disk.
-  - Embedded interface condition: Robin exchange to ambient temperature.
-  - Analytical reference: radial Bessel-series solution at final time.
-  - Check: volume-weighted `L2` error at final time.
-  - Uses `solve_unsteady!(...; scheme=:BE)`.
-
-- `examples/2D/Diffusion/MovingHeat_robin.jl`
-  - 2D unsteady heat diffusion on a moving domain (oscillating disk).
-  - Embedded interface condition: `Robin(1, 0, g)` (Dirichlet-equivalent on Γ).
-  - Analytical reference: manufactured smooth transient solution `u(x,y,t)=exp(λt)sin(πx)sin(πy)`.
-  - Check: volume-weighted `L2` error at final time.
-  - Uses `solve_unsteady_moving!(...; scheme=:BE)`.
-
-- `examples/2D/Diffusion/MovingHeat_robin_real.jl`
-  - 2D unsteady heat diffusion on a moving domain (oscillating disk).
-  - Embedded interface condition: true Robin `Robin(alpha, beta, g)` with `alpha != 0` and `beta != 0`.
-  - Analytical reference: manufactured smooth transient affine field in space with exponential time factor.
-  - Check: volume-weighted `L2` error at final time.
-  - Uses `solve_unsteady_moving!(...; scheme=:BE)`.
+## 1D
 
 - `examples/1D/Diffusion/Poisson_nobody_neumann_mms.jl`
-  - 1D manufactured steady Poisson with no embedded body (`body = -1`).
-  - Outer boundary conditions: homogeneous Neumann on both sides.
-  - Analytical reference: `u(x)=cos(pi*x)`.
-  - Check: volume-weighted `L2` error, with one dof pinned as gauge for the Neumann nullspace.
-
-- `examples/3D/Diffusion/Poisson_outside_sphere_embedded_dirichlet.jl`
-  - 3D manufactured steady Poisson outside a sphere (cut-cell geometry).
-  - Embedded interface condition: Dirichlet implemented as `Robin(1, 0, g)`.
-  - Outer box boundary conditions: Dirichlet from the same analytical solution.
-  - Check: volume-weighted `L2` error and active-volume consistency.
+  - Physical case: full-domain manufactured Poisson with Neumann boundaries.
+  - Key API call: `solve_steady!(DiffusionModelMono(...))`
+  - Check: weighted `L2` error and Neumann-gauge consistency.
 
 - `examples/1D/Diffusion/Poisson_2ph.jl`
-  - 1D diphasic steady Poisson with interface continuity constraints.
-  - Analytical reference: trivial manufactured solution `u1=u2=0`.
-  - Check: phase-wise volume-weighted `L2` errors.
+  - Physical case: diphasic steady Poisson with interface continuity.
+  - Key API call: `solve_steady!(DiffusionModelDiph(...))`
+  - Check: phase-wise weighted error.
+
+- `examples/1D/Diffusion/steady_1d_diph_robinjump.jl`
+  - Physical case: diphasic Robin jump + flux continuity benchmark.
+  - Key API call: `InterfaceConditions(scalar=RobinJump(...), flux=FluxJump(...))`
+  - Check: piecewise analytical profile + interface residuals.
+
+## 2D Fixed Interface
+
+- `examples/2D/Diffusion/Poisson_robin.jl`
+  - Physical case: steady Poisson with embedded Robin interface.
+  - Key API call: `solve_steady!`
+  - Check: weighted `L2` convergence against manufactured solution.
+
+- `examples/2D/Diffusion/Heat_robin.jl`
+  - Physical case: unsteady mono diffusion with embedded Robin interface.
+  - Key API call: `solve_unsteady!(...; scheme=:BE)`
+  - Check: final-time weighted error.
 
 - `examples/2D/Diffusion/Heat_2ph.jl`
-  - 2D diphasic unsteady heat manufactured solution.
-  - Analytical references:
-    - `u1=exp(-2*pi^2*t)*sin(pi*x)sin(pi*y)`
-    - `u2=exp(-8*pi^2*t)*sin(2*pi*x)sin(2*pi*y)`
-  - Check: phase-wise volume-weighted `L2` errors at final time.
-  - Uses `solve_unsteady!(...; scheme=:CN)` and reports operator reuse.
+  - Physical case: unsteady diphasic manufactured heat modes.
+  - Key API call: `solve_unsteady!(...; scheme=:CN)`
+  - Check: phase-wise weighted errors and stable operator reuse path.
 
 - `examples/2D/Diffusion/Heat_2ph_disk_transfer_metrics.jl`
-  - 2D diphasic unsteady diffusion around a disk (legacy transfer benchmark setup).
-  - Interface conditions: `ScalarJump(He, 1, 0)` and `FluxJump(Dg, Dl, 0)`.
-  - Post-processing: `compute_interface_exchange_metrics` for mean flux, mean interface value,
-    exchange coefficient, and generic dimensionless transfer index.
-  - Includes a cross-check against the legacy manual expression
-    `H' * Winv * (G*uω + H*uγ)` and a semi-analytical reference.
-  - Uses `solve_unsteady!(...; scheme=:BE)`.
+  - Physical case: diphasic transfer benchmark with diagnostics.
+  - Key API call: `compute_interface_exchange_metrics`
+  - Check: flux/transfer metrics against manual operator-based expressions.
+
+## 2D Moving Interface
+
+- `examples/2D/Diffusion/MovingHeat_robin.jl`
+  - Physical case: moving mono geometry with manufactured transient field.
+  - Key API call: `solve_unsteady_moving!`
+  - Check: final-time weighted error and robustness under motion.
+
+- `examples/2D/Diffusion/MovingHeat_robin_real.jl`
+  - Physical case: moving mono geometry with nontrivial Robin interface (`α,β ≠ 0`).
+  - Key API call: `MovingDiffusionModelMono(...; bc_interface=Robin(...))`
+  - Check: stable interface coupling with real Robin terms.
 
 - `examples/2D/Diffusion/MovingHeat_2ph.jl`
-  - 2D diphasic unsteady heat on a moving domain (oscillating interface).
-  - Interface conditions: zero scalar jump and zero flux jump.
-  - Analytical reference: shared manufactured field `u1=u2=exp(-2*pi^2*t)sin(pi*x)sin(pi*y)`.
-  - Check: phase-wise volume-weighted `L2` errors at final time.
-  - Uses `solve_unsteady_moving!(...; scheme=:BE)`.
+  - Physical case: moving diphasic manufactured case.
+  - Key API call: `MovingDiffusionModelDiph` + `solve_unsteady_moving!`
+  - Check: phase-wise final-time weighted errors.
 
-Regression tests
+## 3D
 
-For the full package validation suite:
+- `examples/3D/Diffusion/Poisson_dirichlet.jl`
+  - Physical case: 3D manufactured Poisson with embedded interface.
+  - Key API call: `solve_steady!`
+  - Check: weighted `L2` error and active-volume sanity.
 
-```bash
-julia --project=. -e 'using Pkg; Pkg.test()'
-```
+## Verification Map (Tests ↔ Examples)
+
+- Moving mono/diph invariance tests ↔ moving examples (`MovingHeat_*`).
+- Diphasic jump/Robin tests ↔ `steady_1d_diph_robinjump.jl`.
+- Unsteady CN/BE regression tests ↔ `Heat_robin.jl`, `Heat_2ph.jl`.
+- Transfer-metric unit tests ↔ `Heat_2ph_disk_transfer_metrics.jl`.

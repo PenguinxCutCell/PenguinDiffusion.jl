@@ -1,56 +1,85 @@
-**Theory and PDE**
+# Diffusion Models and PDEs
 
-This package discretizes diffusion problems on cut-cell grids (possibly with embedded interfaces). The continuous mono-species diffusion PDE solved is
+## Monophasic Model
 
-$$
-\frac{\partial u}{\partial t} = \nabla \cdot (D(x,t) \nabla u) + s(x,t),
-$$
+In a domain `Ω(t)` with outer boundary `∂Ω`, solve
 
-with appropriate boundary conditions on the domain boundary and jump/interface conditions on embedded interfaces. For two-phase (diph) models we solve a system for $(u_1,u_2)$ with possibly distinct diffusivities $D_1,D_2$ and coupled interface conditions.
+```math
+\partial_t u = \nabla \cdot (D(x,t)\nabla u) + s(x,t)
+```
 
-Interface conditions are expressed in two components: scalar jumps and flux jumps. For a scalar jump we may specify
+with outer boundary conditions (Dirichlet/Neumann/Robin/Periodic depending on side).
 
-$$\alpha_1 u_1 - \alpha_2 u_2 = g, $$
+For fixed geometry (`DiffusionModelMono`), `Ω` is time-independent.
+For moving geometry (`MovingDiffusionModelMono`), assembly uses a space-time slab.
 
-and for flux jumps we may specify relations involving normal fluxes (Robin/Flux types).
+## Diphasic Model
 
-Discrete operators
+For two phases separated by an embedded interface `Γ`:
 
-The code builds discrete difference operators via per-direction gradient and weighting matrices. Using the internal operator names:
+```math
+\partial_t u_k = \nabla \cdot (D_k(x,t)\nabla u_k) + s_k(x,t), \quad k=1,2.
+```
 
-- $G$ and $H$ are discrete gradient and interface sampling operators (stacked per direction).
-- $W^{-1}$ (exposed as `Winv`) is the block-diagonal inverse weighting matrix.
+Interface coupling is represented by `InterfaceConditions` with two optional rows:
 
-From these the following assembled matrices appear in the algebraic system:
+- scalar-like row (`ScalarJump` or `RobinJump`),
+- flux-like row (`FluxJump` or `RobinJump`).
 
-$$
-K = G^{T} W^{-1} G,\qquad C = G^{T} W^{-1} H,\qquad J = H^{T} W^{-1} G,\qquad L = H^{T} W^{-1} H.
-$$
+Typical forms:
 
-These are used to form per-phase block matrices. For a mono model with diagonal diffusivity $D_\omega$ the continuous-to-discrete mapping produces block entries (using diagonal operators $\mathrm{diag}(\cdot)$):
+```math
+\alpha_1 u_1 - \alpha_2 u_2 = g_s,
+```
 
-- $A_{11} = \mathrm{diag}(D_\omega) \, K$
-- $A_{12} = \mathrm{diag}(D_\omega) \, C$
-- $A_{21} = \mathrm{diag}(\beta) \, J$
-- $A_{22} = \mathrm{diag}(\beta) \, L + \mathrm{diag}(\alpha) \, \Gamma$
+```math
+\beta_1 q_1 + \beta_2 q_2 = g_f,
+```
 
-where $\Gamma$ contains the interface surface measures and $\alpha,\beta$ are interface-diagonal contributions coming from the interface conditions. When no interface is present the interface blocks are reduced to identity constraints.
+where `q_k` are discrete normal-flux traces.
 
-Treatment of sources and capacity
+## Outer Boundary Conditions
 
-Cellwise source terms are sampled to a vector $f_\omega$ and multiplied by cell capacity `V` via
+`BorderConditions` supports:
 
-$$ b_1 = V f_\omega, \qquad b_2 = \Gamma g. $$
+- `Dirichlet(value)`,
+- `Neumann(value)`,
+- `Robin(α, β, value)`,
+- `Periodic()`.
 
-Unsteady formulation
+Default side condition is homogeneous Neumann (`0`).
 
-For backward Euler / θ-methods the mass-term contribution is added to the diagonal of $A_{11}$ (or both phase ω blocks for diph) via
+## Embedded Interface Conditions
 
-$$ M = V / \Delta t, $$
+- Mono embedded condition: `PenguinBCs.Robin(α, β, g)`.
+- Diph embedded condition: `InterfaceConditions(scalar=..., flux=...)`.
 
-and the right-hand side gets the corresponding $M u^{n}$ contribution.
+Important convention:
 
-Boundary and halo handling
+- Interface/jump coefficients and values are sampled at `C_γ`.
+- This includes fixed and moving assembly paths.
+- In moving slab assembly there is one natural slab `C_γ` sample set per step; temporal blending uses that same spatial sample set.
 
-- Box boundary conditions are applied with `apply_box_bc_mono!`, which modifies rows of the global matrix and RHS and enforces Dirichlet/Neumann/Periodic behavior on the halo cells.
-- Halo rows and inactive (zero-volume) cells are set to identity to keep the linear system well-posed and numerically stable.
+## Callback Conventions
+
+Diffusivity/source/interface coefficients can be:
+
+- constants,
+- space-dependent callbacks `(x...)`,
+- time-dependent callbacks `(x..., t)`.
+
+Examples:
+
+```julia
+D(x, y, t) = 1 + 0.2sin(2pi*t)
+s(x, t) = x*(1 - x)
+gγ(x, t) = exp(-t)
+```
+
+## Geometry Assumptions
+
+- Fixed models use a fixed cut-cell geometry (`assembled_capacity`).
+- Moving models rebuild per-step slab geometry from `SpaceTimeCartesianGrid`.
+- Halo and inactive rows are regularized to identity to keep the global linear system robust.
+
+See [Algorithms](algorithms.md) for discrete block systems and θ assembly.
