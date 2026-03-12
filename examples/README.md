@@ -60,3 +60,6 @@ Available examples:
   2D diphasic moving-geometry manufactured transient heat case (uses `solve_unsteady_moving!`).
 - `examples/3D/Diffusion/Poisson_dirichlet.jl`:
   3D manufactured Poisson outside a sphere, embedded Dirichlet interface and analytical Dirichlet on the outer box.
+- `examples/3D/Diffusion/Heat_1ph_embedded_stl_cube.jl`:
+  3D steady mono diffusion in the exterior of an STL cube (`examples/assets/cube_ascii.stl`), using
+  `STLInputs.jl` for STL → nodal SDF → body callback and then the standard embedded-boundary solve path.

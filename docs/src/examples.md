@@ -75,6 +75,11 @@ julia --project=examples examples/2D/Diffusion/Poisson_robin.jl
   - Key API call: `solve_steady!`
   - Check: weighted `L2` error and active-volume sanity.
 
+- `examples/3D/Diffusion/Heat_1ph_embedded_stl_cube.jl`
+  - Physical case: steady mono diffusion in the exterior of an embedded STL cube.
+  - Key API call: `STLInputs.sdf_on_grid` + `body_from_sdf` + `solve_steady!`
+  - Check: prints mesh/cut-cell geometry diagnostics and mid-plane `phi`/temperature slices.
+
 ## Verification Map (Tests ↔ Examples)
 
 - Moving mono/diph invariance tests ↔ moving examples (`MovingHeat_*`).
